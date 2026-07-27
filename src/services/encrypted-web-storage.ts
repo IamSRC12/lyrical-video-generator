@@ -97,10 +97,10 @@ export class EncryptedWebStorage implements SecureStorage {
       const decrypted = await crypto.subtle.decrypt(
         {
           name: "AES-GCM",
-          iv: base64ToBytes(record.iv)
+          iv: base64ToBytes(record.iv) as unknown as BufferSource
         },
         masterKey,
-        base64ToBytes(record.payload)
+        base64ToBytes(record.payload) as unknown as BufferSource
       );
 
       return JSON.parse(new TextDecoder().decode(decrypted)) as T;

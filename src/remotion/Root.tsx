@@ -2,6 +2,7 @@ import React from "react";
 import {Composition} from "remotion";
 import {LyricalVideoComposition} from "./Composition";
 import type {EditorProject} from "../lib/editor-schema";
+import {defaultTextStyle} from "../lib/editor-schema";
 
 const defaultProject: EditorProject = {
   version: 1,
@@ -14,16 +15,7 @@ const defaultProject: EditorProject = {
   backgroundColor: "#111827",
   segments: [],
   beats: [],
-  textStyle: {
-    fontFamily: "Inter",
-    fontSize: 84,
-    color: "#ffffff",
-    highlightColor: "#fde047",
-    outlineColor: "#111827",
-    outlineWidth: 2,
-    shadow: "0 8px 26px rgba(0,0,0,.5)",
-    align: "center"
-  },
+  textStyle: {...defaultTextStyle},
   toggles: {
     beatSync: false,
     contextualAnimations: false,
