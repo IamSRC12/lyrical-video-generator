@@ -8,6 +8,7 @@ import {
 } from "remotion";
 import type {EditorProject} from "@/lib/editor-schema";
 import {getAnimationStyle} from "./animations";
+import {getActiveSegment, getHighlightedWordIndex} from "@/lib/caption-timing";
 
 type CompositionProps = {
   project: EditorProject;
@@ -20,12 +21,8 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
   const {fps} = useVideoConfig();
   const currentTime = frame / fps;
 
-  // Find active segment
-  const activeSegment = project.segments.find(
-    (s) => currentTime >= s.start && currentTime <= s.end
-  );
+  const activeSegment = getActiveSegment(project.segments, currentTime);
 
-  // Calculate animation progress for active segment
   const segmentProgress = activeSegment
     ? Math.min(
         1,
@@ -38,29 +35,16 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
     ? getAnimationStyle(activeSegment.animation, segmentProgress)
     : {opacity: 0, transform: "none"};
 
-  // Find active word index for karaoke
-  const activeWordIndex = activeSegment
-    ? activeSegment.words.findIndex(
-        (w) => currentTime >= w.start && currentTime <= w.end
-      )
+  const highlightUpTo = activeSegment
+    ? getHighlightedWordIndex(activeSegment, currentTime)
     : -1;
 
-  // Determine which words have been spoken (for progressive highlight)
-  const spokenWordIndex = activeSegment
-    ? activeSegment.words.findIndex((w) => currentTime < w.start) - 1
-    : -1;
-
-  const highlightUpTo = Math.max(
-    activeWordIndex,
-    spokenWordIndex >= 0 ? spokenWordIndex : -1
-  );
+  const style = project.textStyle;
 
   return (
     <AbsoluteFill>
       {/* Background */}
-      <AbsoluteFill
-        style={{backgroundColor: project.backgroundColor}}
-      >
+      <AbsoluteFill style={{backgroundColor: project.backgroundColor}}>
         {project.backgroundUrl && (
           <Img
             src={project.backgroundUrl}
@@ -84,58 +68,58 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
       {/* Audio */}
       <Audio src={project.audioUrl} />
 
-      {/* Lyrics */}
-      <AbsoluteFill
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "5%"
-        }}
-      >
-        {activeSegment && (
-          <div
+      {/* Lyrics Container */}
+      {activeSegment && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${style.positionX}%`,
+            top: `${style.positionY}%`,
+            transform: `translate(-50%, -50%) ${animStyle.transform}`,
+            opacity: animStyle.opacity,
+            filter: animStyle.filter,
+            textAlign: style.align,
+            maxWidth: "85%",
+            backgroundColor: `color-mix(in srgb, ${style.backgroundColor} ${
+              style.backgroundOpacity * 100
+            }%, transparent)`,
+            padding: `${style.paddingY}px ${style.paddingX}px`,
+            borderRadius: `${style.borderRadius}px`
+          }}
+        >
+          <p
             style={{
-              textAlign: project.textStyle.align,
-              opacity: animStyle.opacity,
-              transform: animStyle.transform,
-              filter: animStyle.filter,
-              maxWidth: "85%"
+              fontFamily: style.fontFamily,
+              fontSize: style.fontSize,
+              fontWeight: style.fontWeight,
+              lineHeight: style.lineHeight,
+              letterSpacing: `${style.letterSpacing}px`,
+              textTransform: style.textTransform,
+              color: style.color,
+              textShadow: animStyle.textShadow ?? style.shadow,
+              WebkitTextStroke: `${style.outlineWidth}px ${style.outlineColor}`,
+              margin: 0
             }}
           >
-            <p
-              style={{
-                fontFamily: project.textStyle.fontFamily,
-                fontSize: project.textStyle.fontSize,
-                fontWeight: 800,
-                lineHeight: 1.2,
-                color: project.textStyle.color,
-                textShadow:
-                  animStyle.textShadow ?? project.textStyle.shadow,
-                WebkitTextStroke: `${project.textStyle.outlineWidth}px ${project.textStyle.outlineColor}`,
-                margin: 0
-              }}
-            >
-              {project.toggles.karaokeHighlight
-                ? activeSegment.words.map((word, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        color:
-                          i <= highlightUpTo
-                            ? project.textStyle.highlightColor
-                            : project.textStyle.color,
-                        transition: "color 0.08s ease"
-                      }}
-                    >
-                      {word.word}{" "}
-                    </span>
-                  ))
-                : activeSegment.line}
-            </p>
-          </div>
-        )}
-      </AbsoluteFill>
+            {project.toggles.karaokeHighlight
+              ? activeSegment.words.map((word, i) => (
+                  <span
+                    key={i}
+                    style={{
+                      color:
+                        i <= highlightUpTo
+                          ? style.highlightColor
+                          : style.color,
+                      transition: "color 0.08s ease"
+                    }}
+                  >
+                    {word.word}{" "}
+                  </span>
+                ))
+              : activeSegment.line}
+          </p>
+        </div>
+      )}
 
       {/* Beat sync flash overlay */}
       {project.toggles.beatSync && (() => {

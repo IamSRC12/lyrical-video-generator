@@ -3,12 +3,9 @@
 import {useEffect, useRef, useState} from "react";
 import {useEditorStore} from "@/stores/editor-store";
 import {Pause, Play, SkipBack, Volume2, VolumeX} from "lucide-react";
+import {getActiveSegment, getHighlightedWordIndex} from "@/lib/caption-timing";
+import {getAnimationStyle} from "@/remotion/animations";
 
-/**
- * Preview canvas that shows a styled lyric preview synchronized with audio.
- * When Remotion Player is available (future enhancement), this wraps it.
- * For now, this provides a native audio + canvas-based lyric preview.
- */
 export function PreviewCanvas() {
   const project = useEditorStore((s) => s.project);
   const playhead = useEditorStore((s) => s.playhead);
@@ -27,15 +24,34 @@ export function PreviewCanvas() {
     );
   }
 
-  // Find the active segment at current playhead
-  const activeSegment = project.segments.find(
-    (s) => playhead >= s.start && playhead <= s.end
-  );
+  const activeSegment = getActiveSegment(project.segments, playhead);
 
-  // Find the active word for karaoke highlighting
-  const activeWordIndex = activeSegment?.words.findIndex(
-    (w) => playhead >= w.start && playhead <= w.end
-  );
+  const activeWordIndex = activeSegment
+    ? getHighlightedWordIndex(activeSegment, playhead)
+    : -1;
+
+  const animationProgress = activeSegment
+    ? Math.min(
+        1,
+        Math.max(
+          0,
+          (playhead - activeSegment.start) /
+            Math.max(
+              0.1,
+              Math.min(
+                0.7,
+                (activeSegment.end - activeSegment.start) * 0.3
+              )
+            )
+        )
+      )
+    : 0;
+
+  const animationStyle = activeSegment
+    ? getAnimationStyle(activeSegment.animation, animationProgress)
+    : undefined;
+
+  const style = project.textStyle;
 
   function togglePlay() {
     const audio = audioRef.current;
@@ -77,7 +93,7 @@ export function PreviewCanvas() {
     <div className="editor-preview flex flex-col overflow-hidden bg-black/40">
       {/* Preview viewport */}
       <div
-        className="relative flex flex-1 items-center justify-center overflow-hidden"
+        className="relative flex flex-1 items-center justify-center overflow-hidden select-none"
         style={{
           backgroundColor: project.backgroundColor,
           backgroundImage: project.backgroundUrl
@@ -87,26 +103,40 @@ export function PreviewCanvas() {
           backgroundPosition: "center"
         }}
       >
-        {/* Gradient overlay for readability */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30" />
+        {/* Gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30 pointer-events-none" />
 
         {/* Lyric display */}
-        <div
-          className="relative z-10 max-w-[80%] px-6"
-          style={{textAlign: project.textStyle.align}}
-        >
-          {activeSegment ? (
+        {activeSegment && (
+          <div
+            className="absolute max-w-[85%] transition-all"
+            style={{
+              left: `${style.positionX}%`,
+              top: `${style.positionY}%`,
+              transform: `translate(-50%, -50%) ${animationStyle?.transform ?? ""}`,
+              opacity: animationStyle?.opacity ?? 1,
+              filter: animationStyle?.filter,
+              textAlign: style.align,
+              backgroundColor: `color-mix(in srgb, ${style.backgroundColor} ${
+                style.backgroundOpacity * 100
+              }%, transparent)`,
+              padding: `${style.paddingY}px ${style.paddingX}px`,
+              borderRadius: `${style.borderRadius}px`,
+              willChange: "transform, opacity, filter"
+            }}
+          >
             <p
-              className="animate-fade-in"
-              key={activeSegment.id}
               style={{
-                fontFamily: project.textStyle.fontFamily,
-                fontSize: `${Math.min(project.textStyle.fontSize * 0.6, 80)}px`,
-                color: project.textStyle.color,
-                textShadow: project.textStyle.shadow,
-                WebkitTextStroke: `${project.textStyle.outlineWidth * 0.5}px ${project.textStyle.outlineColor}`,
-                lineHeight: 1.3,
-                fontWeight: 800
+                fontFamily: style.fontFamily,
+                fontSize: `${Math.min(style.fontSize * 0.55, 76)}px`,
+                fontWeight: style.fontWeight,
+                lineHeight: style.lineHeight,
+                letterSpacing: `${style.letterSpacing * 0.5}px`,
+                textTransform: style.textTransform,
+                color: style.color,
+                textShadow: animationStyle?.textShadow ?? style.shadow,
+                WebkitTextStroke: `${style.outlineWidth * 0.5}px ${style.outlineColor}`,
+                margin: 0
               }}
             >
               {project.toggles.karaokeHighlight
@@ -115,10 +145,10 @@ export function PreviewCanvas() {
                       key={i}
                       style={{
                         color:
-                          activeWordIndex !== undefined && i <= activeWordIndex
-                            ? project.textStyle.highlightColor
-                            : project.textStyle.color,
-                        transition: "color 0.1s ease"
+                          i <= activeWordIndex
+                            ? style.highlightColor
+                            : style.color,
+                        transition: "color 0.08s ease"
                       }}
                     >
                       {word.word}{" "}
@@ -126,15 +156,8 @@ export function PreviewCanvas() {
                   ))
                 : activeSegment.line}
             </p>
-          ) : (
-            <p
-              className="text-sm italic"
-              style={{color: "rgba(255,255,255,0.25)"}}
-            >
-              ♪ ♪ ♪
-            </p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Transport controls */}

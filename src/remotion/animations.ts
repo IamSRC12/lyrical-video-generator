@@ -7,80 +7,94 @@ type AnimationStyle = {
   filter?: string;
 };
 
-/**
- * Returns CSS properties for a given animation at a specific progress (0 → 1).
- */
+function clamp(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function easeOutCubic(value: number) {
+  const t = clamp(value);
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function easeOutBack(value: number) {
+  const t = clamp(value);
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
 export function getAnimationStyle(
   animation: AnimationName,
   progress: number
 ): AnimationStyle {
-  const clamped = Math.max(0, Math.min(1, progress));
+  const t = clamp(progress);
+  const smooth = easeOutCubic(t);
 
   switch (animation) {
     case "fade":
       return {
-        opacity: clamped,
-        transform: `translateY(${(1 - clamped) * 12}px)`
+        opacity: smooth,
+        transform: `translateY(${(1 - smooth) * 18}px)`
       };
 
     case "slide_up":
       return {
-        opacity: Math.min(1, clamped * 2),
-        transform: `translateY(${(1 - clamped) * 60}px)`
+        opacity: clamp(t * 1.8),
+        transform: `translate3d(0, ${(1 - smooth) * 90}px, 0)`
       };
 
     case "pop": {
-      const scale = clamped < 0.5
-        ? 0.3 + clamped * 2.4
-        : 1.5 - (clamped - 0.5) * 1.0;
+      const scale = 0.55 + easeOutBack(t) * 0.45;
+
       return {
-        opacity: Math.min(1, clamped * 3),
-        transform: `scale(${Math.max(0.3, Math.min(1.5, scale))})`
+        opacity: clamp(t * 2.5),
+        transform: `scale(${scale})`
       };
     }
 
     case "neon_pulse": {
-      const glowIntensity = 10 + Math.sin(clamped * Math.PI * 4) * 8;
+      const pulse = 0.5 + Math.sin(t * Math.PI * 5) * 0.5;
+      const glow = 14 + pulse * 20;
+
       return {
-        opacity: clamped,
-        transform: `scale(${1 + Math.sin(clamped * Math.PI * 2) * 0.03})`,
+        opacity: clamp(t * 2),
+        transform: `scale(${0.96 + smooth * 0.04 + pulse * 0.015})`,
         textShadow: [
-          `0 0 ${glowIntensity}px rgba(139, 92, 246, 0.8)`,
-          `0 0 ${glowIntensity * 2}px rgba(139, 92, 246, 0.4)`,
-          `0 0 ${glowIntensity * 3}px rgba(217, 70, 239, 0.2)`
-        ].join(", ")
+          `0 0 ${glow}px rgba(139,92,246,.95)`,
+          `0 0 ${glow * 1.8}px rgba(217,70,239,.55)`,
+          `0 8px 28px rgba(0,0,0,.65)`
+        ].join(",")
       };
     }
 
-    case "zoom_blur": {
-      const scale = 0.85 + clamped * 0.15;
-      const blur = Math.max(0, (1 - clamped) * 6);
+    case "zoom_blur":
       return {
-        opacity: clamped,
-        transform: `scale(${scale})`,
-        filter: `blur(${blur}px)`
+        opacity: clamp(t * 2),
+        transform: `scale(${1.3 - smooth * 0.3})`,
+        filter: `blur(${(1 - smooth) * 14}px)`
       };
-    }
 
     case "rain":
       return {
-        opacity: clamped,
-        transform: `translateY(${(1 - clamped) * -40}px)`
+        opacity: clamp(t * 1.8),
+        transform: `translate3d(0, ${(-1 + smooth) * 100}px, 0)`
       };
 
     case "shake": {
-      const shakeX = clamped < 0.8
-        ? Math.sin(clamped * Math.PI * 8) * 4 * (1 - clamped)
-        : 0;
+      const decay = 1 - t;
+      const x = Math.sin(t * Math.PI * 14) * 14 * decay;
+      const rotation = Math.sin(t * Math.PI * 10) * 1.5 * decay;
+
       return {
-        opacity: Math.min(1, clamped * 2.5),
-        transform: `translateX(${shakeX}px)`
+        opacity: clamp(t * 2.5),
+        transform: `translateX(${x}px) rotate(${rotation}deg)`
       };
     }
 
     default:
       return {
-        opacity: clamped,
+        opacity: 1,
         transform: "none"
       };
   }

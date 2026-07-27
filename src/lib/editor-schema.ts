@@ -35,12 +35,30 @@ export const textStyleSchema = z.object({
   fontFamily: z.string().default("Inter"),
   fontUrl: z.string().url().optional(),
   fontSize: z.number().min(20).max(220).default(84),
+  fontWeight: z.number().int().min(100).max(900).default(800),
+  lineHeight: z.number().min(0.8).max(2).default(1.2),
+  letterSpacing: z.number().min(-10).max(30).default(0),
+
   color: z.string().default("#ffffff"),
   highlightColor: z.string().default("#fde047"),
   outlineColor: z.string().default("#111827"),
   outlineWidth: z.number().min(0).max(12).default(2),
+
   shadow: z.string().default("0 8px 26px rgba(0,0,0,.5)"),
-  align: z.enum(["left", "center", "right"]).default("center")
+  align: z.enum(["left", "center", "right"]).default("center"),
+
+  positionX: z.number().min(0).max(100).default(50),
+  positionY: z.number().min(0).max(100).default(50),
+
+  textTransform: z
+    .enum(["none", "uppercase", "lowercase"])
+    .default("none"),
+
+  backgroundColor: z.string().default("#000000"),
+  backgroundOpacity: z.number().min(0).max(1).default(0),
+  paddingX: z.number().min(0).max(100).default(20),
+  paddingY: z.number().min(0).max(100).default(10),
+  borderRadius: z.number().min(0).max(100).default(12)
 });
 
 export const projectSchema = z.object({

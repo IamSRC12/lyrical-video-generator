@@ -9,7 +9,7 @@ import {soundManager} from "@/services/sound-manager";
 
 type Status = "idle" | "testing" | "valid" | "invalid";
 
-async function validateKey(provider: "groq" | "nvidia", key: string) {
+async function validateKey(provider: "groq" | "opencode", key: string) {
   const response = await fetch("/api/keys/validate", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -42,39 +42,39 @@ function StatusIcon({status}: {status: Status}) {
 export function ApiKeyOnboarding() {
   const router = useRouter();
   const [groq, setGroq] = useState("");
-  const [nvidia, setNvidia] = useState("");
-  const [nvidiaModel, setNvidiaModel] = useState(
-    "deepseek-ai/deepseek-v4-flash"
+  const [opencode, setOpencode] = useState("");
+  const [opencodeModel, setOpencodeModel] = useState(
+    "deepseek-v4-flash-free"
   );
   const [groqStatus, setGroqStatus] = useState<Status>("idle");
-  const [nvidiaStatus, setNvidiaStatus] = useState<Status>("idle");
+  const [opencodeStatus, setOpencodeStatus] = useState<Status>("idle");
 
   useEffect(() => {
     apiKeyStorage.get().then((saved) => {
       if (!saved) return;
       setGroq(saved.groq);
-      setNvidia(saved.nvidia);
-      setNvidiaModel(saved.nvidiaModel);
+      setOpencode(saved.opencode);
+      setOpencodeModel(saved.opencodeModel);
     });
   }, []);
 
   async function save() {
     try {
       setGroqStatus("testing");
-      setNvidiaStatus("testing");
+      setOpencodeStatus("testing");
 
       const results = await Promise.allSettled([
         validateKey("groq", groq),
-        validateKey("nvidia", nvidia)
+        validateKey("opencode", opencode)
       ]);
 
       const groqValid = results[0].status === "fulfilled";
-      const nvidiaValid = results[1].status === "fulfilled";
+      const opencodeValid = results[1].status === "fulfilled";
 
       setGroqStatus(groqValid ? "valid" : "invalid");
-      setNvidiaStatus(nvidiaValid ? "valid" : "invalid");
+      setOpencodeStatus(opencodeValid ? "valid" : "invalid");
 
-      if (!groqValid || !nvidiaValid) {
+      if (!groqValid || !opencodeValid) {
         const failure = results.find(
           (result): result is PromiseRejectedResult =>
             result.status === "rejected"
@@ -83,7 +83,7 @@ export function ApiKeyOnboarding() {
         throw failure?.reason ?? new Error("API-key validation failed.");
       }
 
-      await apiKeyStorage.set({groq, nvidia, nvidiaModel});
+      await apiKeyStorage.set({groq, opencode, opencodeModel});
       await soundManager.beep(720);
 
       toast.success("API keys validated and encrypted locally.");
@@ -125,43 +125,42 @@ export function ApiKeyOnboarding() {
       </label>
 
       <label className="block">
-        <span className="label">NVIDIA NIM API key</span>
+        <span className="label">OpenCode Zen API key</span>
         <div className="relative">
           <input
             className="input pr-11"
             type="password"
             autoComplete="off"
-            value={nvidia}
+            value={opencode}
             onChange={(event) => {
-              setNvidia(event.target.value);
-              setNvidiaStatus("idle");
+              setOpencode(event.target.value);
+              setOpencodeStatus("idle");
             }}
           />
           <span className="absolute right-3 top-3">
-            <StatusIcon status={nvidiaStatus} />
+            <StatusIcon status={opencodeStatus} />
           </span>
         </div>
       </label>
 
       <label className="block">
-        <span className="label">NVIDIA model ID</span>
+        <span className="label">OpenCode model ID</span>
         <input
           className="input"
-          value={nvidiaModel}
+          value={opencodeModel}
           onChange={async (event) => {
-            setNvidiaModel(event.target.value);
+            setOpencodeModel(event.target.value);
             await soundManager.beep(540);
           }}
         />
         <span className="mt-1 block text-xs text-slate-500">
-          Model availability can change. Use an ID listed in your NVIDIA model
-          catalog.
+          OpenCode model catalog ID (e.g. deepseek-v4-flash-free).
         </span>
       </label>
 
       <button
         className="button-primary w-full"
-        disabled={!groq || !nvidia}
+        disabled={!groq || !opencode}
         onClick={save}
       >
         Validate and continue
