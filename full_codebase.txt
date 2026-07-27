@@ -21,12 +21,11 @@ REMOTION_BUNDLE_DIRECTORY=./remotion-bundle
 # Limit uploads. Groq limits depend on the account tier.
 MAX_UPLOAD_BYTES=100000000
 
-# Optional fixed NVIDIA model.
-# Confirm availability with the NVIDIA model catalog.
-NVIDIA_DEFAULT_MODEL=deepseek-ai/deepseek-v4-flash
+# OpenCode Zen
+OPENCODE_DEFAULT_MODEL=deepseek-v4-flash-free
 
 # Rendering
-RENDER_CONCURRENCY=75%
+RENDER_CONCURRENCY=50%
 REMOTION_LICENSE_KEY=
 
 
@@ -44,6 +43,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+ENV CHROMIUM_PATH=/usr/bin/chromium
+ENV RENDER_CONCURRENCY=50%
 
 # Install dependencies
 COPY package.json package-lock.json* ./
@@ -120,10 +122,10 @@ FILE: package.json
   "dependencies": {
     "@auth/core": "^0.40.0",
     "@react-three/fiber": "^9.0.0",
-    "@remotion/media": "^4.0.0",
-    "@remotion/player": "^4.0.0",
-    "@remotion/renderer": "^4.0.0",
-    "@remotion/transitions": "^4.0.0",
+    "@remotion/media": "4.0.499",
+    "@remotion/player": "4.0.499",
+    "@remotion/renderer": "4.0.499",
+    "@remotion/transitions": "4.0.499",
     "@types/three": "^0.180.0",
     "framer-motion": "^12.0.0",
     "lucide-react": "^0.500.0",
@@ -131,14 +133,14 @@ FILE: package.json
     "next-auth": "^5.0.0-beta.30",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "remotion": "^4.0.0",
+    "remotion": "4.0.499",
     "sonner": "^2.0.0",
     "three": "^0.180.0",
     "zod": "^4.0.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@remotion/bundler": "^4.0.0",
+    "@remotion/bundler": "4.0.499",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
@@ -167,13 +169,8 @@ export default {
 FILE: scripts/build-remotion.mjs
 ================================================================================
 
-/**
- * Pre-builds the Remotion bundle during `npm run build:remotion`.
- * This bundle is reused by the rendering route at runtime.
- * @remotion/bundler should NOT run inside a Next.js route.
- */
-
 import {bundle} from "@remotion/bundler";
+import {rm} from "node:fs/promises";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -191,18 +188,27 @@ console.log(`  Entry: ${entryPoint}`);
 console.log(`  Output: ${outDir}`);
 
 try {
+  await rm(outDir, {recursive: true, force: true});
+
   const bundlePath = await bundle({
     entryPoint,
     outDir,
-    webpackOverride: (config) => config
+    webpackOverride: (config) => ({
+      ...config,
+      resolve: {
+        ...(config.resolve || {}),
+        alias: {
+          ...(config.resolve?.alias || {}),
+          "@": path.resolve(__dirname, "../src")
+        }
+      }
+    })
   });
 
   console.log(`Remotion bundle created at: ${bundlePath}`);
 } catch (error) {
   console.error("Failed to build Remotion bundle:", error);
-  // Don't fail the overall build if Remotion bundle fails
-  // (e.g., during CI without GPU/Chrome)
-  console.warn("Continuing without Remotion bundle...");
+  process.exitCode = 1;
 }
 
 
@@ -317,7 +323,7 @@ export async function POST(request: Request) {
 FILE: src/app/api/assets/[id]/route.ts
 ================================================================================
 
-import {readFile} from "node:fs/promises";
+import {readFile, stat} from "node:fs/promises";
 import path from "node:path";
 
 export const runtime = "nodejs";
@@ -327,48 +333,136 @@ const contentTypes: Record<string, string> = {
   ".wav": "audio/wav",
   ".flac": "audio/flac",
   ".ogg": "audio/ogg",
-  ".webm": "audio/webm",
+  ".webm": "video/webm",
   ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
+  ".gif": "image/gif",
   ".ttf": "font/ttf",
   ".otf": "font/otf",
   ".woff": "font/woff",
   ".woff2": "font/woff2"
 };
 
-export async function GET(
-  _request: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  const {id} = await context.params;
-
+function getAssetPath(id: string): string | null {
   if (!/^[a-f0-9-]{36}[.][a-z0-9]{1,8}$/i.test(id)) {
+    return null;
+  }
+
+  const directory = path.resolve(
+    process.env.ASSET_DIRECTORY ?? "./data/assets"
+  );
+
+  return path.join(directory, id);
+}
+
+async function serveAsset(request: Request, id: string, includeBody: boolean) {
+  const filePath = getAssetPath(id);
+
+  if (!filePath) {
     return new Response("Invalid asset ID.", {status: 400});
   }
 
   try {
-    const directory = path.resolve(
-      process.env.ASSET_DIRECTORY ?? "./data/assets"
-    );
-
-    const data = await readFile(path.join(directory, id));
-    const type = contentTypes[path.extname(id).toLowerCase()] ??
+    const fileStats = await stat(filePath);
+    const size = fileStats.size;
+    const type =
+      contentTypes[path.extname(id).toLowerCase()] ??
       "application/octet-stream";
 
+    const commonHeaders = {
+      "Content-Type": type,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=31536000, immutable"
+    };
+
+    const range = request.headers.get("range");
+
+    if (!range) {
+      const data = includeBody ? await readFile(filePath) : null;
+
+      return new Response(data, {
+        status: 200,
+        headers: {
+          ...commonHeaders,
+          "Content-Length": String(size)
+        }
+      });
+    }
+
+    const match = /^bytes=(\d*)-(\d*)$/i.exec(range);
+
+    if (!match) {
+      return new Response("Invalid Range header.", {
+        status: 416,
+        headers: {
+          ...commonHeaders,
+          "Content-Range": `bytes */${size}`
+        }
+      });
+    }
+
+    let start = match[1] ? Number(match[1]) : 0;
+    let end = match[2] ? Number(match[2]) : size - 1;
+
+    if (!match[1] && match[2]) {
+      const suffixLength = Number(match[2]);
+      start = Math.max(0, size - suffixLength);
+      end = size - 1;
+    }
+
+    start = Math.max(0, start);
+    end = Math.min(size - 1, end);
+
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start > end ||
+      start >= size
+    ) {
+      return new Response("Requested range is not satisfiable.", {
+        status: 416,
+        headers: {
+          ...commonHeaders,
+          "Content-Range": `bytes */${size}`
+        }
+      });
+    }
+
+    const data = includeBody
+      ? (await readFile(filePath)).subarray(start, end + 1)
+      : null;
+
     return new Response(data, {
+      status: 206,
       headers: {
-        "Content-Type": type,
-        "Content-Length": String(data.byteLength),
-        "Cache-Control": "public, max-age=31536000, immutable",
-        "Accept-Ranges": "bytes"
+        ...commonHeaders,
+        "Content-Length": String(end - start + 1),
+        "Content-Range": `bytes ${start}-${end}/${size}`
       }
     });
   } catch {
     return new Response("Asset not found.", {status: 404});
   }
+}
+
+export async function GET(
+  request: Request,
+  context: {params: Promise<{id: string}>}
+) {
+  const {id} = await context.params;
+  return serveAsset(request, id, true);
+}
+
+export async function HEAD(
+  request: Request,
+  context: {params: Promise<{id: string}>}
+) {
+  const {id} = await context.params;
+  return serveAsset(request, id, false);
 }
 
 
@@ -414,7 +508,6 @@ export async function POST(request: Request) {
     const outputFilename = `${crypto.randomUUID()}.mp4`;
     const outputPath = path.join(outputDir, outputFilename);
 
-    // Dynamic import to avoid bundling Remotion renderer with the Next.js client
     const {renderMedia, selectComposition} = await import(
       "@remotion/renderer"
     );
@@ -431,11 +524,20 @@ export async function POST(request: Request) {
       composition,
       serveUrl: bundlePath,
       codec: "h264",
+      audioCodec: "aac",
       outputLocation: outputPath,
       inputProps: {project},
-      concurrency: concurrency === "75%" ? "75%" : Number(concurrency),
+      concurrency,
+      crf: 18,
+      pixelFormat: "yuv420p",
+      x264Preset: "medium",
+      overwrite: true,
+      browserExecutable: process.env.CHROMIUM_PATH || undefined,
       chromiumOptions: {
         enableMultiProcessOnLinux: true
+      },
+      onProgress: ({progress}) => {
+        console.log(`Render progress: ${Math.round(progress * 100)}%`);
       }
     });
 
@@ -444,7 +546,7 @@ export async function POST(request: Request) {
       process.env.APP_BASE_URL ?? "http://localhost:3000";
 
     return Response.json({
-      url: `${baseUrl}/api/assets/${encodeURIComponent(outputFilename)}`,
+      url: `${baseUrl}/api/renders/${encodeURIComponent(outputFilename)}`,
       durationMs,
       outputFilename
     });
@@ -474,7 +576,7 @@ import {z} from "zod";
 export const runtime = "nodejs";
 
 const requestSchema = z.object({
-  provider: z.enum(["groq", "nvidia"]),
+  provider: z.enum(["groq", "opencode"]),
   key: z.string().min(10)
 });
 
@@ -487,7 +589,7 @@ export async function POST(request: Request) {
     const url =
       provider === "groq"
         ? "https://api.groq.com/openai/v1/models"
-        : "https://integrate.api.nvidia.com/v1/models";
+        : "https://opencode.ai/zen/v1/models";
 
     const response = await fetch(url, {
       headers: {
@@ -528,11 +630,11 @@ export async function POST(request: Request) {
 
 
 ================================================================================
-FILE: src/app/api/nvidia/animations/route.ts
+FILE: src/app/api/opencode/animations/route.ts
 ================================================================================
 
 import {requireUser} from "@/lib/auth-guard";
-import {generateContextualAnimations} from "@/services/nvidia";
+import {generateContextualAnimations} from "@/services/opencode";
 import {z} from "zod";
 
 export const runtime = "nodejs";
@@ -541,6 +643,7 @@ const schema = z.object({
   model: z.string().min(1),
   lines: z
     .array(z.object({id: z.string(), line: z.string().min(1)}))
+    .min(1)
     .max(500)
 });
 
@@ -548,9 +651,13 @@ export async function POST(request: Request) {
   try {
     await requireUser();
 
-    const apiKey = request.headers.get("x-nvidia-key");
+    const apiKey = request.headers.get("x-opencode-key");
+
     if (!apiKey) {
-      return Response.json({message: "NVIDIA key is missing."}, {status: 400});
+      return Response.json(
+        {message: "OpenCode API key is missing."},
+        {status: 400}
+      );
     }
 
     const input = schema.parse(await request.json());
@@ -565,7 +672,7 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof Response) return error;
 
-    console.error("NVIDIA animation error:", error);
+    console.error("OpenCode animation error:", error);
 
     return Response.json(
       {
@@ -577,6 +684,112 @@ export async function POST(request: Request) {
       {status: 500}
     );
   }
+}
+
+
+================================================================================
+FILE: src/app/api/renders/[id]/route.ts
+================================================================================
+
+import {readFile, stat} from "node:fs/promises";
+import path from "node:path";
+
+export const runtime = "nodejs";
+
+function getRenderPath(id: string): string | null {
+  if (!/^[a-f0-9-]{36}[.]mp4$/i.test(id)) {
+    return null;
+  }
+
+  return path.join(
+    path.resolve(process.env.RENDER_DIRECTORY ?? "./data/renders"),
+    id
+  );
+}
+
+async function serveRender(request: Request, id: string, includeBody: boolean) {
+  const filePath = getRenderPath(id);
+
+  if (!filePath) {
+    return new Response("Invalid render ID.", {status: 400});
+  }
+
+  try {
+    const fileStats = await stat(filePath);
+    const size = fileStats.size;
+    const range = request.headers.get("range");
+
+    const commonHeaders = {
+      "Content-Type": "video/mp4",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, no-store",
+      "Content-Disposition": `attachment; filename="lyrical-video-${id}"`
+    };
+
+    if (!range) {
+      const data = includeBody ? await readFile(filePath) : null;
+
+      return new Response(data, {
+        headers: {
+          ...commonHeaders,
+          "Content-Length": String(size)
+        }
+      });
+    }
+
+    const match = /^bytes=(\d*)-(\d*)$/i.exec(range);
+
+    if (!match) {
+      return new Response(null, {
+        status: 416,
+        headers: {"Content-Range": `bytes */${size}`}
+      });
+    }
+
+    const start = match[1] ? Number(match[1]) : 0;
+    const end = Math.min(
+      match[2] ? Number(match[2]) : size - 1,
+      size - 1
+    );
+
+    if (start > end || start >= size) {
+      return new Response(null, {
+        status: 416,
+        headers: {"Content-Range": `bytes */${size}`}
+      });
+    }
+
+    const data = includeBody
+      ? (await readFile(filePath)).subarray(start, end + 1)
+      : null;
+
+    return new Response(data, {
+      status: 206,
+      headers: {
+        ...commonHeaders,
+        "Content-Length": String(end - start + 1),
+        "Content-Range": `bytes ${start}-${end}/${size}`
+      }
+    });
+  } catch {
+    return new Response("Render not found.", {status: 404});
+  }
+}
+
+export async function GET(
+  request: Request,
+  context: {params: Promise<{id: string}>}
+) {
+  const {id} = await context.params;
+  return serveRender(request, id, true);
+}
+
+export async function HEAD(
+  request: Request,
+  context: {params: Promise<{id: string}>}
+) {
+  const {id} = await context.params;
+  return serveRender(request, id, false);
 }
 
 
@@ -1422,7 +1635,7 @@ import {soundManager} from "@/services/sound-manager";
 
 type Status = "idle" | "testing" | "valid" | "invalid";
 
-async function validateKey(provider: "groq" | "nvidia", key: string) {
+async function validateKey(provider: "groq" | "opencode", key: string) {
   const response = await fetch("/api/keys/validate", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -1455,39 +1668,39 @@ function StatusIcon({status}: {status: Status}) {
 export function ApiKeyOnboarding() {
   const router = useRouter();
   const [groq, setGroq] = useState("");
-  const [nvidia, setNvidia] = useState("");
-  const [nvidiaModel, setNvidiaModel] = useState(
-    "deepseek-ai/deepseek-v4-flash"
+  const [opencode, setOpencode] = useState("");
+  const [opencodeModel, setOpencodeModel] = useState(
+    "deepseek-v4-flash-free"
   );
   const [groqStatus, setGroqStatus] = useState<Status>("idle");
-  const [nvidiaStatus, setNvidiaStatus] = useState<Status>("idle");
+  const [opencodeStatus, setOpencodeStatus] = useState<Status>("idle");
 
   useEffect(() => {
     apiKeyStorage.get().then((saved) => {
       if (!saved) return;
       setGroq(saved.groq);
-      setNvidia(saved.nvidia);
-      setNvidiaModel(saved.nvidiaModel);
+      setOpencode(saved.opencode);
+      setOpencodeModel(saved.opencodeModel);
     });
   }, []);
 
   async function save() {
     try {
       setGroqStatus("testing");
-      setNvidiaStatus("testing");
+      setOpencodeStatus("testing");
 
       const results = await Promise.allSettled([
         validateKey("groq", groq),
-        validateKey("nvidia", nvidia)
+        validateKey("opencode", opencode)
       ]);
 
       const groqValid = results[0].status === "fulfilled";
-      const nvidiaValid = results[1].status === "fulfilled";
+      const opencodeValid = results[1].status === "fulfilled";
 
       setGroqStatus(groqValid ? "valid" : "invalid");
-      setNvidiaStatus(nvidiaValid ? "valid" : "invalid");
+      setOpencodeStatus(opencodeValid ? "valid" : "invalid");
 
-      if (!groqValid || !nvidiaValid) {
+      if (!groqValid || !opencodeValid) {
         const failure = results.find(
           (result): result is PromiseRejectedResult =>
             result.status === "rejected"
@@ -1496,7 +1709,7 @@ export function ApiKeyOnboarding() {
         throw failure?.reason ?? new Error("API-key validation failed.");
       }
 
-      await apiKeyStorage.set({groq, nvidia, nvidiaModel});
+      await apiKeyStorage.set({groq, opencode, opencodeModel});
       await soundManager.beep(720);
 
       toast.success("API keys validated and encrypted locally.");
@@ -1538,43 +1751,42 @@ export function ApiKeyOnboarding() {
       </label>
 
       <label className="block">
-        <span className="label">NVIDIA NIM API key</span>
+        <span className="label">OpenCode Zen API key</span>
         <div className="relative">
           <input
             className="input pr-11"
             type="password"
             autoComplete="off"
-            value={nvidia}
+            value={opencode}
             onChange={(event) => {
-              setNvidia(event.target.value);
-              setNvidiaStatus("idle");
+              setOpencode(event.target.value);
+              setOpencodeStatus("idle");
             }}
           />
           <span className="absolute right-3 top-3">
-            <StatusIcon status={nvidiaStatus} />
+            <StatusIcon status={opencodeStatus} />
           </span>
         </div>
       </label>
 
       <label className="block">
-        <span className="label">NVIDIA model ID</span>
+        <span className="label">OpenCode model ID</span>
         <input
           className="input"
-          value={nvidiaModel}
+          value={opencodeModel}
           onChange={async (event) => {
-            setNvidiaModel(event.target.value);
+            setOpencodeModel(event.target.value);
             await soundManager.beep(540);
           }}
         />
         <span className="mt-1 block text-xs text-slate-500">
-          Model availability can change. Use an ID listed in your NVIDIA model
-          catalog.
+          OpenCode model catalog ID (e.g. deepseek-v4-flash-free).
         </span>
       </label>
 
       <button
         className="button-primary w-full"
-        disabled={!groq || !nvidia}
+        disabled={!groq || !opencode}
         onClick={save}
       >
         Validate and continue
@@ -1632,16 +1844,23 @@ FILE: src/components/editor/LeftPanel.tsx
 
 "use client";
 
+import {useRef, useState} from "react";
 import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  ImagePlus,
+  LoaderCircle,
+  Move,
   Palette,
   Sparkles,
+  Trash2,
   Type
 } from "lucide-react";
 import {useEditorStore} from "@/stores/editor-store";
 import type {AnimationName} from "@/lib/editor-schema";
+import {uploadAsset} from "@/services/asset-client";
+import {toast} from "sonner";
 import {cn} from "@/lib/cn";
 
 const ANIMATION_OPTIONS: Array<{value: AnimationName; label: string; emoji: string}> = [
@@ -1659,8 +1878,12 @@ export function LeftPanel() {
   const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
   const selectSegment = useEditorStore((s) => s.selectSegment);
   const setAnimation = useEditorStore((s) => s.setAnimation);
+  const setBackground = useEditorStore((s) => s.setBackground);
   const patchTextStyle = useEditorStore((s) => s.patchTextStyle);
   const setToggle = useEditorStore((s) => s.setToggle);
+
+  const backgroundInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingBackground, setUploadingBackground] = useState(false);
 
   if (!project) return null;
 
@@ -1668,168 +1891,380 @@ export function LeftPanel() {
     (s) => s.id === selectedSegmentId
   );
 
+  async function uploadBackground(file: File) {
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image background.");
+      return;
+    }
+
+    try {
+      setUploadingBackground(true);
+      const url = await uploadAsset(file);
+      setBackground(url);
+      toast.success("Background inserted.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Background upload failed."
+      );
+    } finally {
+      setUploadingBackground(false);
+    }
+  }
+
   return (
     <aside className="editor-sidebar flex flex-col overflow-hidden border-r border-white/5 bg-surface-raised">
-      {/* Text Style Controls */}
-      <div className="space-y-4 border-b border-white/5 p-4">
-        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-          <Type size={12} />
-          Text Style
-        </div>
+      <div className="flex-1 overflow-y-auto divide-y divide-white/5">
+        {/* Background Controls */}
+        <div className="space-y-3 p-4">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+            <ImagePlus size={12} />
+            Background
+          </div>
 
-        {/* Font Size */}
-        <div>
-          <label className="label text-xs">Font Size</label>
           <input
-            type="range"
-            min={20}
-            max={220}
-            step={2}
-            value={project.textStyle.fontSize}
-            onChange={(e) =>
-              patchTextStyle({fontSize: Number(e.target.value)})
-            }
-            className="w-full accent-violet-500"
+            ref={backgroundInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void uploadBackground(file);
+              event.currentTarget.value = "";
+            }}
           />
-          <span className="text-xs text-slate-500">
-            {project.textStyle.fontSize}px
-          </span>
-        </div>
 
-        {/* Colors */}
-        <div className="grid grid-cols-3 gap-2">
-          <label className="block">
-            <span className="label text-xs">Text</span>
-            <input
-              type="color"
-              value={project.textStyle.color}
-              onChange={(e) => patchTextStyle({color: e.target.value})}
-              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-            />
-          </label>
-          <label className="block">
-            <span className="label text-xs">Highlight</span>
-            <input
-              type="color"
-              value={project.textStyle.highlightColor}
-              onChange={(e) =>
-                patchTextStyle({highlightColor: e.target.value})
-              }
-              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-            />
-          </label>
-          <label className="block">
-            <span className="label text-xs">Outline</span>
-            <input
-              type="color"
-              value={project.textStyle.outlineColor}
-              onChange={(e) =>
-                patchTextStyle({outlineColor: e.target.value})
-              }
-              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-            />
-          </label>
-        </div>
-
-        {/* Alignment */}
-        <div className="flex gap-1">
-          {(["left", "center", "right"] as const).map((align) => (
-            <button
-              key={align}
-              className={cn(
-                "button-ghost flex-1",
-                project.textStyle.align === align && "bg-white/8 text-violet-400"
-              )}
-              onClick={() => patchTextStyle({align})}
-            >
-              {align === "left" && <AlignLeft size={14} />}
-              {align === "center" && <AlignCenter size={14} />}
-              {align === "right" && <AlignRight size={14} />}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Toggles */}
-      <div className="space-y-3 border-b border-white/5 p-4">
-        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-          <Sparkles size={12} />
-          Features
-        </div>
-
-        {(
-          [
-            ["karaokeHighlight", "Karaoke Highlight"],
-            ["beatSync", "Beat Sync"],
-            ["contextualAnimations", "AI Animations"]
-          ] as const
-        ).map(([key, label]) => (
-          <label
-            key={key}
-            className="flex items-center justify-between text-sm"
+          <button
+            type="button"
+            className="button-secondary w-full text-xs"
+            disabled={uploadingBackground}
+            onClick={() => backgroundInputRef.current?.click()}
           >
-            <span>{label}</span>
+            {uploadingBackground ? (
+              <LoaderCircle size={14} className="animate-spin" />
+            ) : (
+              <ImagePlus size={14} />
+            )}
+            Upload background image
+          </button>
+
+          {project.backgroundUrl && (
+            <div className="space-y-2">
+              <img
+                src={project.backgroundUrl}
+                alt="Background preview"
+                className="h-24 w-full rounded-lg object-cover border border-white/10"
+              />
+
+              <button
+                type="button"
+                className="button-ghost w-full text-xs text-red-400"
+                onClick={() => setBackground(undefined)}
+              >
+                <Trash2 size={14} />
+                Remove image
+              </button>
+            </div>
+          )}
+
+          <label className="block">
+            <span className="label text-xs">Canvas Color</span>
             <input
-              type="checkbox"
-              className="toggle"
-              checked={project.toggles[key]}
-              onChange={(e) => setToggle(key, e.target.checked)}
+              type="color"
+              value={project.backgroundColor}
+              onChange={(event) =>
+                useEditorStore.setState((state) =>
+                  state.project
+                    ? {
+                        project: {
+                          ...state.project,
+                          backgroundColor: event.target.value
+                        }
+                      }
+                    : state
+                )
+              }
+              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
             />
           </label>
-        ))}
-      </div>
-
-      {/* Segment List */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">
-          <Palette size={12} />
-          Segments ({project.segments.length})
         </div>
 
-        <div className="space-y-1">
-          {project.segments.map((segment) => (
-            <div
-              key={segment.id}
-              className={cn(
-                "cursor-pointer rounded-lg border border-transparent p-3 text-sm transition-all",
-                "hover:border-white/8 hover:bg-white/3",
-                selectedSegmentId === segment.id &&
-                  "border-violet-500/30 bg-violet-500/8"
-              )}
-              onClick={() => selectSegment(segment.id)}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex-1 truncate font-medium">
-                  {segment.line}
-                </span>
-                <span className="text-[10px] text-slate-500">
-                  {segment.start.toFixed(1)}s
-                </span>
-              </div>
+        {/* Text Style Controls */}
+        <div className="space-y-4 p-4">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+            <Type size={12} />
+            Typography
+          </div>
 
-              {selectedSegmentId === segment.id && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {ANIMATION_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      className={cn(
-                        "rounded-md px-2 py-0.5 text-[10px] font-medium transition-all",
-                        "border border-white/8 hover:border-violet-500/30",
-                        segment.animation === opt.value &&
-                          "border-violet-500 bg-violet-500/15 text-violet-300"
-                      )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setAnimation(segment.id, opt.value);
-                      }}
-                    >
-                      {opt.emoji} {opt.label}
-                    </button>
-                  ))}
-                </div>
-              )}
+          {/* Font Size & Weight */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label text-xs">Size ({project.textStyle.fontSize}px)</label>
+              <input
+                type="range"
+                min={20}
+                max={220}
+                step={2}
+                value={project.textStyle.fontSize}
+                onChange={(e) =>
+                  patchTextStyle({fontSize: Number(e.target.value)})
+                }
+                className="w-full accent-violet-500"
+              />
             </div>
+            <div>
+              <label className="label text-xs">Weight ({project.textStyle.fontWeight})</label>
+              <input
+                type="range"
+                min={100}
+                max={900}
+                step={100}
+                value={project.textStyle.fontWeight}
+                onChange={(e) =>
+                  patchTextStyle({fontWeight: Number(e.target.value)})
+                }
+                className="w-full accent-violet-500"
+              />
+            </div>
+          </div>
+
+          {/* Line Height & Letter Spacing */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label text-xs">Line Height ({project.textStyle.lineHeight})</label>
+              <input
+                type="range"
+                min={0.8}
+                max={2}
+                step={0.1}
+                value={project.textStyle.lineHeight}
+                onChange={(e) =>
+                  patchTextStyle({lineHeight: Number(e.target.value)})
+                }
+                className="w-full accent-violet-500"
+              />
+            </div>
+            <div>
+              <label className="label text-xs">Spacing ({project.textStyle.letterSpacing}px)</label>
+              <input
+                type="range"
+                min={-5}
+                max={20}
+                step={1}
+                value={project.textStyle.letterSpacing}
+                onChange={(e) =>
+                  patchTextStyle({letterSpacing: Number(e.target.value)})
+                }
+                className="w-full accent-violet-500"
+              />
+            </div>
+          </div>
+
+          {/* Colors */}
+          <div className="grid grid-cols-3 gap-2">
+            <label className="block">
+              <span className="label text-xs">Text</span>
+              <input
+                type="color"
+                value={project.textStyle.color}
+                onChange={(e) => patchTextStyle({color: e.target.value})}
+                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
+              />
+            </label>
+            <label className="block">
+              <span className="label text-xs">Highlight</span>
+              <input
+                type="color"
+                value={project.textStyle.highlightColor}
+                onChange={(e) =>
+                  patchTextStyle({highlightColor: e.target.value})
+                }
+                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
+              />
+            </label>
+            <label className="block">
+              <span className="label text-xs">Outline</span>
+              <input
+                type="color"
+                value={project.textStyle.outlineColor}
+                onChange={(e) =>
+                  patchTextStyle({outlineColor: e.target.value})
+                }
+                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
+              />
+            </label>
+          </div>
+
+          {/* Alignment */}
+          <div className="flex gap-1">
+            {(["left", "center", "right"] as const).map((align) => (
+              <button
+                key={align}
+                className={cn(
+                  "button-ghost flex-1",
+                  project.textStyle.align === align && "bg-white/8 text-violet-400"
+                )}
+                onClick={() => patchTextStyle({align})}
+              >
+                {align === "left" && <AlignLeft size={14} />}
+                {align === "center" && <AlignCenter size={14} />}
+                {align === "right" && <AlignRight size={14} />}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Position & Box Styling */}
+        <div className="space-y-4 p-4">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+            <Move size={12} />
+            Position & Box
+          </div>
+
+          {/* Position X & Y */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label text-xs">Pos X ({project.textStyle.positionX}%)</label>
+              <input
+                type="range"
+                min={10}
+                max={90}
+                value={project.textStyle.positionX}
+                onChange={(e) =>
+                  patchTextStyle({positionX: Number(e.target.value)})
+                }
+                className="w-full accent-violet-500"
+              />
+            </div>
+            <div>
+              <label className="label text-xs">Pos Y ({project.textStyle.positionY}%)</label>
+              <input
+                type="range"
+                min={10}
+                max={90}
+                value={project.textStyle.positionY}
+                onChange={(e) =>
+                  patchTextStyle({positionY: Number(e.target.value)})
+                }
+                className="w-full accent-violet-500"
+              />
+            </div>
+          </div>
+
+          {/* Box Background & Opacity */}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="label text-xs">Box Color</span>
+              <input
+                type="color"
+                value={project.textStyle.backgroundColor}
+                onChange={(e) =>
+                  patchTextStyle({backgroundColor: e.target.value})
+                }
+                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
+              />
+            </label>
+            <div>
+              <label className="label text-xs">
+                Opacity ({Math.round(project.textStyle.backgroundOpacity * 100)}%)
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={project.textStyle.backgroundOpacity}
+                onChange={(e) =>
+                  patchTextStyle({backgroundOpacity: Number(e.target.value)})
+                }
+                className="w-full accent-violet-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Feature Toggles */}
+        <div className="space-y-3 p-4">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+            <Sparkles size={12} />
+            Features
+          </div>
+
+          {(
+            [
+              ["karaokeHighlight", "Karaoke Highlight"],
+              ["beatSync", "Beat Sync"],
+              ["contextualAnimations", "AI Animations"]
+            ] as const
+          ).map(([key, label]) => (
+            <label
+              key={key}
+              className="flex items-center justify-between text-sm cursor-pointer"
+            >
+              <span>{label}</span>
+              <input
+                type="checkbox"
+                className="toggle"
+                checked={project.toggles[key]}
+                onChange={(e) => setToggle(key, e.target.checked)}
+              />
+            </label>
           ))}
+        </div>
+
+        {/* Segment List */}
+        <div className="p-4">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">
+            <Palette size={12} />
+            Segments ({project.segments.length})
+          </div>
+
+          <div className="space-y-1">
+            {project.segments.map((segment) => (
+              <div
+                key={segment.id}
+                className={cn(
+                  "cursor-pointer rounded-lg border border-transparent p-3 text-sm transition-all",
+                  "hover:border-white/8 hover:bg-white/3",
+                  selectedSegmentId === segment.id &&
+                    "border-violet-500/30 bg-violet-500/8"
+                )}
+                onClick={() => selectSegment(segment.id)}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex-1 truncate font-medium">
+                    {segment.line}
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    {segment.start.toFixed(1)}s
+                  </span>
+                </div>
+
+                {selectedSegmentId === segment.id && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {ANIMATION_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        className={cn(
+                          "rounded-md px-2 py-0.5 text-[10px] font-medium transition-all",
+                          "border border-white/8 hover:border-violet-500/30",
+                          segment.animation === opt.value &&
+                            "border-violet-500 bg-violet-500/15 text-violet-300"
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAnimation(segment.id, opt.value);
+                        }}
+                      >
+                        {opt.emoji} {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </aside>
@@ -1846,12 +2281,9 @@ FILE: src/components/editor/PreviewCanvas.tsx
 import {useEffect, useRef, useState} from "react";
 import {useEditorStore} from "@/stores/editor-store";
 import {Pause, Play, SkipBack, Volume2, VolumeX} from "lucide-react";
+import {getActiveSegment, getHighlightedWordIndex} from "@/lib/caption-timing";
+import {getAnimationStyle} from "@/remotion/animations";
 
-/**
- * Preview canvas that shows a styled lyric preview synchronized with audio.
- * When Remotion Player is available (future enhancement), this wraps it.
- * For now, this provides a native audio + canvas-based lyric preview.
- */
 export function PreviewCanvas() {
   const project = useEditorStore((s) => s.project);
   const playhead = useEditorStore((s) => s.playhead);
@@ -1870,15 +2302,34 @@ export function PreviewCanvas() {
     );
   }
 
-  // Find the active segment at current playhead
-  const activeSegment = project.segments.find(
-    (s) => playhead >= s.start && playhead <= s.end
-  );
+  const activeSegment = getActiveSegment(project.segments, playhead);
 
-  // Find the active word for karaoke highlighting
-  const activeWordIndex = activeSegment?.words.findIndex(
-    (w) => playhead >= w.start && playhead <= w.end
-  );
+  const activeWordIndex = activeSegment
+    ? getHighlightedWordIndex(activeSegment, playhead)
+    : -1;
+
+  const animationProgress = activeSegment
+    ? Math.min(
+        1,
+        Math.max(
+          0,
+          (playhead - activeSegment.start) /
+            Math.max(
+              0.1,
+              Math.min(
+                0.7,
+                (activeSegment.end - activeSegment.start) * 0.3
+              )
+            )
+        )
+      )
+    : 0;
+
+  const animationStyle = activeSegment
+    ? getAnimationStyle(activeSegment.animation, animationProgress)
+    : undefined;
+
+  const style = project.textStyle;
 
   function togglePlay() {
     const audio = audioRef.current;
@@ -1920,7 +2371,7 @@ export function PreviewCanvas() {
     <div className="editor-preview flex flex-col overflow-hidden bg-black/40">
       {/* Preview viewport */}
       <div
-        className="relative flex flex-1 items-center justify-center overflow-hidden"
+        className="relative flex flex-1 items-center justify-center overflow-hidden select-none"
         style={{
           backgroundColor: project.backgroundColor,
           backgroundImage: project.backgroundUrl
@@ -1930,26 +2381,40 @@ export function PreviewCanvas() {
           backgroundPosition: "center"
         }}
       >
-        {/* Gradient overlay for readability */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30" />
+        {/* Gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30 pointer-events-none" />
 
         {/* Lyric display */}
-        <div
-          className="relative z-10 max-w-[80%] px-6"
-          style={{textAlign: project.textStyle.align}}
-        >
-          {activeSegment ? (
+        {activeSegment && (
+          <div
+            className="absolute max-w-[85%] transition-all"
+            style={{
+              left: `${style.positionX}%`,
+              top: `${style.positionY}%`,
+              transform: `translate(-50%, -50%) ${animationStyle?.transform ?? ""}`,
+              opacity: animationStyle?.opacity ?? 1,
+              filter: animationStyle?.filter,
+              textAlign: style.align,
+              backgroundColor: `color-mix(in srgb, ${style.backgroundColor} ${
+                style.backgroundOpacity * 100
+              }%, transparent)`,
+              padding: `${style.paddingY}px ${style.paddingX}px`,
+              borderRadius: `${style.borderRadius}px`,
+              willChange: "transform, opacity, filter"
+            }}
+          >
             <p
-              className="animate-fade-in"
-              key={activeSegment.id}
               style={{
-                fontFamily: project.textStyle.fontFamily,
-                fontSize: `${Math.min(project.textStyle.fontSize * 0.6, 80)}px`,
-                color: project.textStyle.color,
-                textShadow: project.textStyle.shadow,
-                WebkitTextStroke: `${project.textStyle.outlineWidth * 0.5}px ${project.textStyle.outlineColor}`,
-                lineHeight: 1.3,
-                fontWeight: 800
+                fontFamily: style.fontFamily,
+                fontSize: `${Math.min(style.fontSize * 0.55, 76)}px`,
+                fontWeight: style.fontWeight,
+                lineHeight: style.lineHeight,
+                letterSpacing: `${style.letterSpacing * 0.5}px`,
+                textTransform: style.textTransform,
+                color: style.color,
+                textShadow: animationStyle?.textShadow ?? style.shadow,
+                WebkitTextStroke: `${style.outlineWidth * 0.5}px ${style.outlineColor}`,
+                margin: 0
               }}
             >
               {project.toggles.karaokeHighlight
@@ -1958,10 +2423,10 @@ export function PreviewCanvas() {
                       key={i}
                       style={{
                         color:
-                          activeWordIndex !== undefined && i <= activeWordIndex
-                            ? project.textStyle.highlightColor
-                            : project.textStyle.color,
-                        transition: "color 0.1s ease"
+                          i <= activeWordIndex
+                            ? style.highlightColor
+                            : style.color,
+                        transition: "color 0.08s ease"
                       }}
                     >
                       {word.word}{" "}
@@ -1969,15 +2434,8 @@ export function PreviewCanvas() {
                   ))
                 : activeSegment.line}
             </p>
-          ) : (
-            <p
-              className="text-sm italic"
-              style={{color: "rgba(255,255,255,0.25)"}}
-            >
-              ♪ ♪ ♪
-            </p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Transport controls */}
@@ -2236,7 +2694,6 @@ import {
   Film,
   LoaderCircle,
   Monitor,
-  Settings2,
   Sparkles
 } from "lucide-react";
 import {toast} from "sonner";
@@ -2262,22 +2719,25 @@ export function TopBar() {
 
     const credentials = await apiKeyStorage.get();
     if (!credentials) {
-      toast.error("API keys not found.");
+      toast.error("API keys not found. Please setup API keys on onboarding page.");
       return;
     }
 
-    toast.info("Generating contextual animations...");
+    toast.info("Generating contextual animations with OpenCode Zen...");
 
     try {
-      const response = await fetch("/api/nvidia/animations", {
+      const response = await fetch("/api/opencode/animations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-nvidia-key": credentials.nvidia
+          "x-opencode-key": credentials.opencode
         },
         body: JSON.stringify({
-          model: credentials.nvidiaModel,
-          lines: project.segments.map((s) => ({id: s.id, line: s.line}))
+          model: credentials.opencodeModel,
+          lines: project.segments.map((segment) => ({
+            id: segment.id,
+            line: segment.line
+          }))
         })
       });
 
@@ -2327,8 +2787,13 @@ export function TopBar() {
         `Rendered in ${(result.durationMs / 1000).toFixed(1)}s`
       );
 
-      // Open download
-      window.open(result.url, "_blank");
+      // Programmatic anchor download to prevent popup blocker issues
+      const anchor = document.createElement("a");
+      anchor.href = result.url;
+      anchor.download = result.outputFilename ?? "lyrical-video.mp4";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
     } catch (error) {
       setExportState(false, 0);
       toast.error(
@@ -3328,6 +3793,47 @@ export async function detectBeats(file: File): Promise<BeatAnalysis> {
 
 
 ================================================================================
+FILE: src/lib/caption-timing.ts
+================================================================================
+
+import type {LyricSegment} from "./editor-schema";
+
+export function getActiveSegment(
+  segments: LyricSegment[],
+  time: number
+): LyricSegment | undefined {
+  let active: LyricSegment | undefined;
+
+  for (const segment of segments) {
+    if (time >= segment.start && time < segment.end) {
+      if (!active || segment.start >= active.start) {
+        active = segment;
+      }
+    }
+  }
+
+  return active;
+}
+
+export function getHighlightedWordIndex(
+  segment: LyricSegment,
+  time: number
+): number {
+  let result = -1;
+
+  for (let index = 0; index < segment.words.length; index++) {
+    if (time >= segment.words[index].start) {
+      result = index;
+    } else {
+      break;
+    }
+  }
+
+  return result;
+}
+
+
+================================================================================
 FILE: src/lib/cn.ts
 ================================================================================
 
@@ -3379,12 +3885,30 @@ export const textStyleSchema = z.object({
   fontFamily: z.string().default("Inter"),
   fontUrl: z.string().url().optional(),
   fontSize: z.number().min(20).max(220).default(84),
+  fontWeight: z.number().int().min(100).max(900).default(800),
+  lineHeight: z.number().min(0.8).max(2).default(1.2),
+  letterSpacing: z.number().min(-10).max(30).default(0),
+
   color: z.string().default("#ffffff"),
   highlightColor: z.string().default("#fde047"),
   outlineColor: z.string().default("#111827"),
   outlineWidth: z.number().min(0).max(12).default(2),
+
   shadow: z.string().default("0 8px 26px rgba(0,0,0,.5)"),
-  align: z.enum(["left", "center", "right"]).default("center")
+  align: z.enum(["left", "center", "right"]).default("center"),
+
+  positionX: z.number().min(0).max(100).default(50),
+  positionY: z.number().min(0).max(100).default(50),
+
+  textTransform: z
+    .enum(["none", "uppercase", "lowercase"])
+    .default("none"),
+
+  backgroundColor: z.string().default("#000000"),
+  backgroundOpacity: z.number().min(0).max(1).default(0),
+  paddingX: z.number().min(0).max(100).default(20),
+  paddingY: z.number().min(0).max(100).default(10),
+  borderRadius: z.number().min(0).max(100).default(12)
 });
 
 export const projectSchema = z.object({
@@ -3473,80 +3997,94 @@ type AnimationStyle = {
   filter?: string;
 };
 
-/**
- * Returns CSS properties for a given animation at a specific progress (0 → 1).
- */
+function clamp(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function easeOutCubic(value: number) {
+  const t = clamp(value);
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function easeOutBack(value: number) {
+  const t = clamp(value);
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
 export function getAnimationStyle(
   animation: AnimationName,
   progress: number
 ): AnimationStyle {
-  const clamped = Math.max(0, Math.min(1, progress));
+  const t = clamp(progress);
+  const smooth = easeOutCubic(t);
 
   switch (animation) {
     case "fade":
       return {
-        opacity: clamped,
-        transform: `translateY(${(1 - clamped) * 12}px)`
+        opacity: smooth,
+        transform: `translateY(${(1 - smooth) * 18}px)`
       };
 
     case "slide_up":
       return {
-        opacity: Math.min(1, clamped * 2),
-        transform: `translateY(${(1 - clamped) * 60}px)`
+        opacity: clamp(t * 1.8),
+        transform: `translate3d(0, ${(1 - smooth) * 90}px, 0)`
       };
 
     case "pop": {
-      const scale = clamped < 0.5
-        ? 0.3 + clamped * 2.4
-        : 1.5 - (clamped - 0.5) * 1.0;
+      const scale = 0.55 + easeOutBack(t) * 0.45;
+
       return {
-        opacity: Math.min(1, clamped * 3),
-        transform: `scale(${Math.max(0.3, Math.min(1.5, scale))})`
+        opacity: clamp(t * 2.5),
+        transform: `scale(${scale})`
       };
     }
 
     case "neon_pulse": {
-      const glowIntensity = 10 + Math.sin(clamped * Math.PI * 4) * 8;
+      const pulse = 0.5 + Math.sin(t * Math.PI * 5) * 0.5;
+      const glow = 14 + pulse * 20;
+
       return {
-        opacity: clamped,
-        transform: `scale(${1 + Math.sin(clamped * Math.PI * 2) * 0.03})`,
+        opacity: clamp(t * 2),
+        transform: `scale(${0.96 + smooth * 0.04 + pulse * 0.015})`,
         textShadow: [
-          `0 0 ${glowIntensity}px rgba(139, 92, 246, 0.8)`,
-          `0 0 ${glowIntensity * 2}px rgba(139, 92, 246, 0.4)`,
-          `0 0 ${glowIntensity * 3}px rgba(217, 70, 239, 0.2)`
-        ].join(", ")
+          `0 0 ${glow}px rgba(139,92,246,.95)`,
+          `0 0 ${glow * 1.8}px rgba(217,70,239,.55)`,
+          `0 8px 28px rgba(0,0,0,.65)`
+        ].join(",")
       };
     }
 
-    case "zoom_blur": {
-      const scale = 0.85 + clamped * 0.15;
-      const blur = Math.max(0, (1 - clamped) * 6);
+    case "zoom_blur":
       return {
-        opacity: clamped,
-        transform: `scale(${scale})`,
-        filter: `blur(${blur}px)`
+        opacity: clamp(t * 2),
+        transform: `scale(${1.3 - smooth * 0.3})`,
+        filter: `blur(${(1 - smooth) * 14}px)`
       };
-    }
 
     case "rain":
       return {
-        opacity: clamped,
-        transform: `translateY(${(1 - clamped) * -40}px)`
+        opacity: clamp(t * 1.8),
+        transform: `translate3d(0, ${(-1 + smooth) * 100}px, 0)`
       };
 
     case "shake": {
-      const shakeX = clamped < 0.8
-        ? Math.sin(clamped * Math.PI * 8) * 4 * (1 - clamped)
-        : 0;
+      const decay = 1 - t;
+      const x = Math.sin(t * Math.PI * 14) * 14 * decay;
+      const rotation = Math.sin(t * Math.PI * 10) * 1.5 * decay;
+
       return {
-        opacity: Math.min(1, clamped * 2.5),
-        transform: `translateX(${shakeX}px)`
+        opacity: clamp(t * 2.5),
+        transform: `translateX(${x}px) rotate(${rotation}deg)`
       };
     }
 
     default:
       return {
-        opacity: clamped,
+        opacity: 1,
         transform: "none"
       };
   }
@@ -3565,8 +4103,9 @@ import {
   useCurrentFrame,
   useVideoConfig
 } from "remotion";
-import type {EditorProject} from "@/lib/editor-schema";
+import type {EditorProject} from "../lib/editor-schema";
 import {getAnimationStyle} from "./animations";
+import {getActiveSegment, getHighlightedWordIndex} from "../lib/caption-timing";
 
 type CompositionProps = {
   project: EditorProject;
@@ -3579,12 +4118,8 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
   const {fps} = useVideoConfig();
   const currentTime = frame / fps;
 
-  // Find active segment
-  const activeSegment = project.segments.find(
-    (s) => currentTime >= s.start && currentTime <= s.end
-  );
+  const activeSegment = getActiveSegment(project.segments, currentTime);
 
-  // Calculate animation progress for active segment
   const segmentProgress = activeSegment
     ? Math.min(
         1,
@@ -3597,29 +4132,16 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
     ? getAnimationStyle(activeSegment.animation, segmentProgress)
     : {opacity: 0, transform: "none"};
 
-  // Find active word index for karaoke
-  const activeWordIndex = activeSegment
-    ? activeSegment.words.findIndex(
-        (w) => currentTime >= w.start && currentTime <= w.end
-      )
+  const highlightUpTo = activeSegment
+    ? getHighlightedWordIndex(activeSegment, currentTime)
     : -1;
 
-  // Determine which words have been spoken (for progressive highlight)
-  const spokenWordIndex = activeSegment
-    ? activeSegment.words.findIndex((w) => currentTime < w.start) - 1
-    : -1;
-
-  const highlightUpTo = Math.max(
-    activeWordIndex,
-    spokenWordIndex >= 0 ? spokenWordIndex : -1
-  );
+  const style = project.textStyle;
 
   return (
     <AbsoluteFill>
       {/* Background */}
-      <AbsoluteFill
-        style={{backgroundColor: project.backgroundColor}}
-      >
+      <AbsoluteFill style={{backgroundColor: project.backgroundColor}}>
         {project.backgroundUrl && (
           <Img
             src={project.backgroundUrl}
@@ -3643,58 +4165,58 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
       {/* Audio */}
       <Audio src={project.audioUrl} />
 
-      {/* Lyrics */}
-      <AbsoluteFill
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "5%"
-        }}
-      >
-        {activeSegment && (
-          <div
+      {/* Lyrics Container */}
+      {activeSegment && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${style.positionX}%`,
+            top: `${style.positionY}%`,
+            transform: `translate(-50%, -50%) ${animStyle.transform}`,
+            opacity: animStyle.opacity,
+            filter: animStyle.filter,
+            textAlign: style.align,
+            maxWidth: "85%",
+            backgroundColor: `color-mix(in srgb, ${style.backgroundColor} ${
+              style.backgroundOpacity * 100
+            }%, transparent)`,
+            padding: `${style.paddingY}px ${style.paddingX}px`,
+            borderRadius: `${style.borderRadius}px`
+          }}
+        >
+          <p
             style={{
-              textAlign: project.textStyle.align,
-              opacity: animStyle.opacity,
-              transform: animStyle.transform,
-              filter: animStyle.filter,
-              maxWidth: "85%"
+              fontFamily: style.fontFamily,
+              fontSize: style.fontSize,
+              fontWeight: style.fontWeight,
+              lineHeight: style.lineHeight,
+              letterSpacing: `${style.letterSpacing}px`,
+              textTransform: style.textTransform,
+              color: style.color,
+              textShadow: animStyle.textShadow ?? style.shadow,
+              WebkitTextStroke: `${style.outlineWidth}px ${style.outlineColor}`,
+              margin: 0
             }}
           >
-            <p
-              style={{
-                fontFamily: project.textStyle.fontFamily,
-                fontSize: project.textStyle.fontSize,
-                fontWeight: 800,
-                lineHeight: 1.2,
-                color: project.textStyle.color,
-                textShadow:
-                  animStyle.textShadow ?? project.textStyle.shadow,
-                WebkitTextStroke: `${project.textStyle.outlineWidth}px ${project.textStyle.outlineColor}`,
-                margin: 0
-              }}
-            >
-              {project.toggles.karaokeHighlight
-                ? activeSegment.words.map((word, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        color:
-                          i <= highlightUpTo
-                            ? project.textStyle.highlightColor
-                            : project.textStyle.color,
-                        transition: "color 0.08s ease"
-                      }}
-                    >
-                      {word.word}{" "}
-                    </span>
-                  ))
-                : activeSegment.line}
-            </p>
-          </div>
-        )}
-      </AbsoluteFill>
+            {project.toggles.karaokeHighlight
+              ? activeSegment.words.map((word, i) => (
+                  <span
+                    key={i}
+                    style={{
+                      color:
+                        i <= highlightUpTo
+                          ? style.highlightColor
+                          : style.color,
+                      transition: "color 0.08s ease"
+                    }}
+                  >
+                    {word.word}{" "}
+                  </span>
+                ))
+              : activeSegment.line}
+          </p>
+        </div>
+      )}
 
       {/* Beat sync flash overlay */}
       {project.toggles.beatSync && (() => {
@@ -3743,7 +4265,8 @@ FILE: src/remotion/Root.tsx
 import React from "react";
 import {Composition} from "remotion";
 import {LyricalVideoComposition} from "./Composition";
-import type {EditorProject} from "@/lib/editor-schema";
+import type {EditorProject} from "../lib/editor-schema";
+import {defaultTextStyle} from "../lib/editor-schema";
 
 const defaultProject: EditorProject = {
   version: 1,
@@ -3756,16 +4279,7 @@ const defaultProject: EditorProject = {
   backgroundColor: "#111827",
   segments: [],
   beats: [],
-  textStyle: {
-    fontFamily: "Inter",
-    fontSize: 84,
-    color: "#ffffff",
-    highlightColor: "#fde047",
-    outlineColor: "#111827",
-    outlineWidth: 2,
-    shadow: "0 8px 26px rgba(0,0,0,.5)",
-    align: "center"
-  },
+  textStyle: {...defaultTextStyle},
   toggles: {
     beatSync: false,
     contextualAnimations: false,
@@ -3807,11 +4321,11 @@ import {secureStorage} from "./encrypted-web-storage";
 
 export type ApiCredentials = {
   groq: string;
-  nvidia: string;
-  nvidiaModel: string;
+  opencode: string;
+  opencodeModel: string;
 };
 
-const CREDENTIAL_KEY = "api-credentials";
+const CREDENTIAL_KEY = "api-credentials-v2";
 
 export const apiKeyStorage = {
   get: () => secureStorage.get<ApiCredentials>(CREDENTIAL_KEY),
@@ -3947,10 +4461,10 @@ export class EncryptedWebStorage implements SecureStorage {
       const decrypted = await crypto.subtle.decrypt(
         {
           name: "AES-GCM",
-          iv: base64ToBytes(record.iv)
+          iv: base64ToBytes(record.iv) as unknown as BufferSource
         },
         masterKey,
-        base64ToBytes(record.payload)
+        base64ToBytes(record.payload) as unknown as BufferSource
       );
 
       return JSON.parse(new TextDecoder().decode(decrypted)) as T;
@@ -4031,7 +4545,7 @@ export async function transcribeWithGroq(options: {
 
 
 ================================================================================
-FILE: src/services/nvidia.ts
+FILE: src/services/opencode.ts
 ================================================================================
 
 import {animationSchema} from "@/lib/editor-schema";
@@ -4047,7 +4561,7 @@ const responseSchema = z.object({
   )
 });
 
-const animationResponseSchema = z.object({
+const resultSchema = z.object({
   animations: z.array(
     z.object({
       id: z.string(),
@@ -4056,13 +4570,30 @@ const animationResponseSchema = z.object({
   )
 });
 
+function extractJson(value: string): string {
+  const cleaned = value
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("OpenCode did not return a JSON object.");
+  }
+
+  return cleaned.slice(start, end + 1);
+}
+
 export async function generateContextualAnimations(options: {
   apiKey: string;
   model: string;
   lines: Array<{id: string; line: string}>;
 }) {
   const response = await fetch(
-    "https://integrate.api.nvidia.com/v1/chat/completions",
+    "https://opencode.ai/zen/v1/chat/completions",
     {
       method: "POST",
       headers: {
@@ -4072,17 +4603,18 @@ export async function generateContextualAnimations(options: {
       body: JSON.stringify({
         model: options.model,
         temperature: 0.2,
-        max_tokens: 1800,
+        max_tokens: 2500,
         messages: [
           {
             role: "system",
             content: [
-              "You assign safe visual animations to lyric lines.",
-              "Return JSON only.",
-              "Allowed animations: fade, slide_up, pop, neon_pulse,",
-              "zoom_blur, rain, shake.",
-              'Format: {"animations":[{"id":"line id","animation":"fade"}]}',
-              "Return exactly one entry for every supplied ID."
+              "Assign one animation to every lyric line.",
+              "Use the meaning, emotion and intensity of each line.",
+              "Allowed values:",
+              "fade, slide_up, pop, neon_pulse, zoom_blur, rain, shake.",
+              "Avoid assigning the same animation repeatedly.",
+              "Return JSON only in this format:",
+              '{"animations":[{"id":"id","animation":"fade"}]}'
             ].join(" ")
           },
           {
@@ -4098,25 +4630,23 @@ export async function generateContextualAnimations(options: {
 
   if (!response.ok) {
     throw new Error(
-      `NVIDIA NIM failed (${response.status}): ${(await response.text()).slice(
+      `OpenCode failed (${response.status}): ${(await response.text()).slice(
         0,
-        300
+        400
       )}`
     );
   }
 
   const body = responseSchema.parse(await response.json());
-  const raw = body.choices[0]?.message.content;
+  const content = body.choices[0]?.message.content;
 
-  if (!raw) throw new Error("NVIDIA returned an empty response.");
+  if (!content) {
+    throw new Error("OpenCode returned an empty response.");
+  }
 
-  const jsonText = raw
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-
-  return animationResponseSchema.parse(JSON.parse(jsonText)).animations;
+  return resultSchema.parse(
+    JSON.parse(extractJson(content))
+  ).animations;
 }
 
 
