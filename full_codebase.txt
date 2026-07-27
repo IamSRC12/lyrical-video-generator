@@ -1,0 +1,4456 @@
+# AI Lyrical Video Generator — Complete Integrated Full-Stack Codebase
+
+================================================================================
+FILE: .env.example
+================================================================================
+
+AUTH_SECRET=replace-with-at-least-32-random-characters
+
+# Auth.js GitHub login
+AUTH_GITHUB_ID=
+AUTH_GITHUB_SECRET=
+
+# Public URL reachable by the Remotion rendering process
+APP_BASE_URL=http://localhost:3000
+
+# Filesystem persistence for self-hosting
+ASSET_DIRECTORY=./data/assets
+RENDER_DIRECTORY=./data/renders
+REMOTION_BUNDLE_DIRECTORY=./remotion-bundle
+
+# Limit uploads. Groq limits depend on the account tier.
+MAX_UPLOAD_BYTES=100000000
+
+# Optional fixed NVIDIA model.
+# Confirm availability with the NVIDIA model catalog.
+NVIDIA_DEFAULT_MODEL=deepseek-ai/deepseek-v4-flash
+
+# Rendering
+RENDER_CONCURRENCY=75%
+REMOTION_LICENSE_KEY=
+
+
+================================================================================
+FILE: Dockerfile
+================================================================================
+
+FROM node:22-slim
+
+# Install Chrome dependencies for Remotion
+RUN apt-get update && apt-get install -y \
+    chromium \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm ci --production=false
+
+# Copy source
+COPY . .
+
+# Build Remotion bundle and Next.js
+RUN npm run build
+
+# Create data directories
+RUN mkdir -p data/assets data/renders
+
+EXPOSE 3000
+
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+
+CMD ["npm", "start"]
+
+
+================================================================================
+FILE: next-env.d.ts
+================================================================================
+
+/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+import "./.next/dev/types/routes.d.ts";
+
+// NOTE: This file should not be edited
+// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+
+
+================================================================================
+FILE: next.config.ts
+================================================================================
+
+import type {NextConfig} from "next";
+
+const nextConfig: NextConfig = {
+  serverExternalPackages: [
+    "@remotion/renderer",
+    "@remotion/compositor-linux-x64-gnu",
+    "@remotion/compositor-linux-x64-musl"
+  ],
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "100mb"
+    }
+  }
+};
+
+export default nextConfig;
+
+
+================================================================================
+FILE: package.json
+================================================================================
+
+{
+  "name": "lyrical-video-generator",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build:remotion": "node scripts/build-remotion.mjs",
+    "build": "npm run build:remotion && next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@auth/core": "^0.40.0",
+    "@react-three/fiber": "^9.0.0",
+    "@remotion/media": "^4.0.0",
+    "@remotion/player": "^4.0.0",
+    "@remotion/renderer": "^4.0.0",
+    "@remotion/transitions": "^4.0.0",
+    "@types/three": "^0.180.0",
+    "framer-motion": "^12.0.0",
+    "lucide-react": "^0.500.0",
+    "next": "^16.0.0",
+    "next-auth": "^5.0.0-beta.30",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "remotion": "^4.0.0",
+    "sonner": "^2.0.0",
+    "three": "^0.180.0",
+    "zod": "^4.0.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "^4.0.0",
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^16.0.0",
+    "postcss": "^8.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.9.0"
+  }
+}
+
+
+================================================================================
+FILE: postcss.config.mjs
+================================================================================
+
+export default {
+  plugins: {
+    "@tailwindcss/postcss": {}
+  }
+};
+
+
+================================================================================
+FILE: scripts/build-remotion.mjs
+================================================================================
+
+/**
+ * Pre-builds the Remotion bundle during `npm run build:remotion`.
+ * This bundle is reused by the rendering route at runtime.
+ * @remotion/bundler should NOT run inside a Next.js route.
+ */
+
+import {bundle} from "@remotion/bundler";
+import path from "node:path";
+import {fileURLToPath} from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const entryPoint = path.resolve(__dirname, "../src/remotion/index.ts");
+const outDir = path.resolve(
+  __dirname,
+  "..",
+  process.env.REMOTION_BUNDLE_DIRECTORY ?? "remotion-bundle"
+);
+
+console.log("Building Remotion bundle...");
+console.log(`  Entry: ${entryPoint}`);
+console.log(`  Output: ${outDir}`);
+
+try {
+  const bundlePath = await bundle({
+    entryPoint,
+    outDir,
+    webpackOverride: (config) => config
+  });
+
+  console.log(`Remotion bundle created at: ${bundlePath}`);
+} catch (error) {
+  console.error("Failed to build Remotion bundle:", error);
+  // Don't fail the overall build if Remotion bundle fails
+  // (e.g., during CI without GPU/Chrome)
+  console.warn("Continuing without Remotion bundle...");
+}
+
+
+================================================================================
+FILE: scripts/combine.mjs
+================================================================================
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+const rootDir = process.cwd();
+const outputFile = path.join(rootDir, 'full_codebase.txt');
+const artifactFile = 'C:/Users/Crystal/.gemini/antigravity-ide/brain/903e3fe0-f3bd-404d-b7fd-b4039ca209c3/full_codebase.txt';
+
+const includeExts = new Set(['.ts', '.tsx', '.js', '.mjs', '.json', '.css', '.example']);
+const excludeDirs = new Set(['node_modules', '.next', '.git', 'remotion-bundle', 'data']);
+
+let combinedContent = '# AI Lyrical Video Generator — Complete Integrated Full-Stack Codebase\n\n';
+
+function walk(dir) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    const relPath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+
+    if (entry.isDirectory()) {
+      if (!excludeDirs.has(entry.name)) {
+        walk(fullPath);
+      }
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name);
+      if (includeExts.has(ext) || entry.name === 'Dockerfile' || entry.name === '.env.example') {
+        if (entry.name === 'package-lock.json') continue;
+        const content = fs.readFileSync(fullPath, 'utf8');
+        combinedContent += '================================================================================\n';
+        combinedContent += `FILE: ${relPath}\n`;
+        combinedContent += '================================================================================\n\n';
+        combinedContent += content;
+        combinedContent += '\n\n';
+      }
+    }
+  }
+}
+
+walk(rootDir);
+
+fs.writeFileSync(outputFile, combinedContent, 'utf8');
+fs.writeFileSync(artifactFile, combinedContent, 'utf8');
+
+console.log(`Successfully generated full codebase text file (${combinedContent.length} bytes, ~${Math.round(combinedContent.length/1024)} KB)`);
+
+
+================================================================================
+FILE: src/app/api/assets/route.ts
+================================================================================
+
+import {requireUser} from "@/lib/auth-guard";
+import {mkdir, writeFile} from "node:fs/promises";
+import path from "node:path";
+
+export const runtime = "nodejs";
+
+function safeExtension(name: string) {
+  const extension = path.extname(name).toLowerCase();
+  return /^[.][a-z0-9]{1,8}$/.test(extension) ? extension : "";
+}
+
+export async function POST(request: Request) {
+  try {
+    await requireUser();
+
+    const formData = await request.formData();
+    const file = formData.get("file");
+
+    if (!(file instanceof File)) {
+      return Response.json({message: "File is required."}, {status: 400});
+    }
+
+    const maxBytes = Number(process.env.MAX_UPLOAD_BYTES ?? 100_000_000);
+
+    if (file.size > maxBytes) {
+      return Response.json({message: "File is too large."}, {status: 413});
+    }
+
+    const id = `${crypto.randomUUID()}${safeExtension(file.name)}`;
+    const directory = path.resolve(
+      process.env.ASSET_DIRECTORY ?? "./data/assets"
+    );
+
+    await mkdir(directory, {recursive: true});
+    await writeFile(path.join(directory, id), Buffer.from(await file.arrayBuffer()));
+
+    const baseUrl =
+      process.env.APP_BASE_URL ?? new URL(request.url).origin;
+
+    return Response.json({
+      id,
+      url: `${baseUrl}/api/assets/${encodeURIComponent(id)}`
+    });
+  } catch (error) {
+    if (error instanceof Response) return error;
+
+    return Response.json(
+      {message: error instanceof Error ? error.message : "Upload failed."},
+      {status: 500}
+    );
+  }
+}
+
+
+================================================================================
+FILE: src/app/api/assets/[id]/route.ts
+================================================================================
+
+import {readFile} from "node:fs/promises";
+import path from "node:path";
+
+export const runtime = "nodejs";
+
+const contentTypes: Record<string, string> = {
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".flac": "audio/flac",
+  ".ogg": "audio/ogg",
+  ".webm": "audio/webm",
+  ".mp4": "video/mp4",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2"
+};
+
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  const {id} = await context.params;
+
+  if (!/^[a-f0-9-]{36}[.][a-z0-9]{1,8}$/i.test(id)) {
+    return new Response("Invalid asset ID.", {status: 400});
+  }
+
+  try {
+    const directory = path.resolve(
+      process.env.ASSET_DIRECTORY ?? "./data/assets"
+    );
+
+    const data = await readFile(path.join(directory, id));
+    const type = contentTypes[path.extname(id).toLowerCase()] ??
+      "application/octet-stream";
+
+    return new Response(data, {
+      headers: {
+        "Content-Type": type,
+        "Content-Length": String(data.byteLength),
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Accept-Ranges": "bytes"
+      }
+    });
+  } catch {
+    return new Response("Asset not found.", {status: 404});
+  }
+}
+
+
+================================================================================
+FILE: src/app/api/auth/[...nextauth]/route.ts
+================================================================================
+
+import {handlers} from "@/auth";
+
+export const {GET, POST} = handlers;
+
+
+================================================================================
+FILE: src/app/api/export/route.ts
+================================================================================
+
+import {requireUser} from "@/lib/auth-guard";
+import {
+  getRemotionBundlePath,
+  getRenderOutputDirectory,
+  getRenderConcurrency
+} from "@/services/render";
+import {projectSchema} from "@/lib/editor-schema";
+import {mkdir} from "node:fs/promises";
+import path from "node:path";
+
+export const runtime = "nodejs";
+export const maxDuration = 600;
+
+export async function POST(request: Request) {
+  try {
+    await requireUser();
+
+    const body = await request.json();
+    const project = projectSchema.parse(body.project);
+
+    const bundlePath = getRemotionBundlePath();
+    const outputDir = getRenderOutputDirectory();
+    const concurrency = getRenderConcurrency();
+
+    await mkdir(outputDir, {recursive: true});
+
+    const outputFilename = `${crypto.randomUUID()}.mp4`;
+    const outputPath = path.join(outputDir, outputFilename);
+
+    // Dynamic import to avoid bundling Remotion renderer with the Next.js client
+    const {renderMedia, selectComposition} = await import(
+      "@remotion/renderer"
+    );
+
+    const composition = await selectComposition({
+      serveUrl: bundlePath,
+      id: "LyricalVideo",
+      inputProps: {project}
+    });
+
+    const startTime = Date.now();
+
+    await renderMedia({
+      composition,
+      serveUrl: bundlePath,
+      codec: "h264",
+      outputLocation: outputPath,
+      inputProps: {project},
+      concurrency: concurrency === "75%" ? "75%" : Number(concurrency),
+      chromiumOptions: {
+        enableMultiProcessOnLinux: true
+      }
+    });
+
+    const durationMs = Date.now() - startTime;
+    const baseUrl =
+      process.env.APP_BASE_URL ?? "http://localhost:3000";
+
+    return Response.json({
+      url: `${baseUrl}/api/assets/${encodeURIComponent(outputFilename)}`,
+      durationMs,
+      outputFilename
+    });
+  } catch (error) {
+    if (error instanceof Response) return error;
+
+    console.error("Export error:", error);
+
+    return Response.json(
+      {
+        message:
+          error instanceof Error ? error.message : "Export failed."
+      },
+      {status: 500}
+    );
+  }
+}
+
+
+================================================================================
+FILE: src/app/api/keys/validate/route.ts
+================================================================================
+
+import {requireUser} from "@/lib/auth-guard";
+import {z} from "zod";
+
+export const runtime = "nodejs";
+
+const requestSchema = z.object({
+  provider: z.enum(["groq", "nvidia"]),
+  key: z.string().min(10)
+});
+
+export async function POST(request: Request) {
+  try {
+    await requireUser();
+
+    const {provider, key} = requestSchema.parse(await request.json());
+
+    const url =
+      provider === "groq"
+        ? "https://api.groq.com/openai/v1/models"
+        : "https://integrate.api.nvidia.com/v1/models";
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${key}`,
+        Accept: "application/json"
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000)
+    });
+
+    if (!response.ok) {
+      return Response.json(
+        {
+          valid: false,
+          message:
+            response.status === 401 || response.status === 403
+              ? "The API key was rejected."
+              : `Provider returned HTTP ${response.status}.`
+        },
+        {status: 400}
+      );
+    }
+
+    return Response.json({valid: true});
+  } catch (error) {
+    if (error instanceof Response) return error;
+
+    return Response.json(
+      {
+        valid: false,
+        message:
+          error instanceof Error ? error.message : "Validation failed."
+      },
+      {status: 400}
+    );
+  }
+}
+
+
+================================================================================
+FILE: src/app/api/nvidia/animations/route.ts
+================================================================================
+
+import {requireUser} from "@/lib/auth-guard";
+import {generateContextualAnimations} from "@/services/nvidia";
+import {z} from "zod";
+
+export const runtime = "nodejs";
+
+const schema = z.object({
+  model: z.string().min(1),
+  lines: z
+    .array(z.object({id: z.string(), line: z.string().min(1)}))
+    .max(500)
+});
+
+export async function POST(request: Request) {
+  try {
+    await requireUser();
+
+    const apiKey = request.headers.get("x-nvidia-key");
+    if (!apiKey) {
+      return Response.json({message: "NVIDIA key is missing."}, {status: 400});
+    }
+
+    const input = schema.parse(await request.json());
+
+    const animations = await generateContextualAnimations({
+      apiKey,
+      model: input.model,
+      lines: input.lines
+    });
+
+    return Response.json({animations});
+  } catch (error) {
+    if (error instanceof Response) return error;
+
+    console.error("NVIDIA animation error:", error);
+
+    return Response.json(
+      {
+        message:
+          error instanceof Error
+            ? error.message
+            : "Animation generation failed."
+      },
+      {status: 500}
+    );
+  }
+}
+
+
+================================================================================
+FILE: src/app/api/transcription/route.ts
+================================================================================
+
+import {alignLyricsToWords} from "@/lib/alignment";
+import {requireUser} from "@/lib/auth-guard";
+import {transcribeWithGroq} from "@/services/groq";
+
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
+const allowedTypes = new Set([
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/flac",
+  "audio/mp4",
+  "audio/ogg",
+  "audio/webm"
+]);
+
+export async function POST(request: Request) {
+  try {
+    await requireUser();
+
+    const formData = await request.formData();
+    const file = formData.get("audio");
+    const lyrics = formData.get("lyrics");
+    const apiKey = request.headers.get("x-groq-key");
+
+    if (!(file instanceof File)) {
+      return Response.json({message: "Audio file is required."}, {status: 400});
+    }
+
+    if (typeof lyrics !== "string" || !lyrics.trim()) {
+      return Response.json({message: "Lyrics are required."}, {status: 400});
+    }
+
+    if (!apiKey) {
+      return Response.json({message: "Groq API key is missing."}, {status: 400});
+    }
+
+    const maxBytes = Number(process.env.MAX_UPLOAD_BYTES ?? 100_000_000);
+
+    if (file.size > maxBytes) {
+      return Response.json(
+        {message: `Audio exceeds the ${maxBytes} byte application limit.`},
+        {status: 413}
+      );
+    }
+
+    if (file.type && !allowedTypes.has(file.type)) {
+      return Response.json(
+        {message: `Unsupported audio type: ${file.type}`},
+        {status: 415}
+      );
+    }
+
+    const transcription = await transcribeWithGroq({
+      apiKey,
+      file,
+      prompt: lyrics.slice(0, 800)
+    });
+
+    const segments = alignLyricsToWords(lyrics, transcription.words);
+    const finalWord = transcription.words.at(-1);
+
+    return Response.json({
+      transcript: transcription.text ?? "",
+      duration:
+        transcription.duration ??
+        finalWord?.end ??
+        segments.at(-1)?.end ??
+        1,
+      segments
+    });
+  } catch (error) {
+    if (error instanceof Response) return error;
+
+    console.error("Transcription error:", error);
+
+    return Response.json(
+      {
+        message:
+          error instanceof Error ? error.message : "Transcription failed."
+      },
+      {status: 500}
+    );
+  }
+}
+
+
+================================================================================
+FILE: src/app/editor/page.tsx
+================================================================================
+
+import {EditorWorkspace} from "@/components/editor/EditorWorkspace";
+
+export default function EditorPage() {
+  return <EditorWorkspace />;
+}
+
+
+
+================================================================================
+FILE: src/app/globals.css
+================================================================================
+
+@import "tailwindcss";
+
+/* ─── Design Tokens ─── */
+@theme {
+  --color-surface: #0a0a12;
+  --color-surface-raised: #12121e;
+  --color-surface-overlay: #1a1a2e;
+  --color-surface-glass: rgba(18, 18, 30, 0.72);
+
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-accent: rgba(139, 92, 246, 0.3);
+
+  --color-accent-violet: #8b5cf6;
+  --color-accent-fuchsia: #d946ef;
+  --color-accent-cyan: #06b6d4;
+  --color-accent-amber: #f59e0b;
+
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+
+  --font-sans: "Inter", "SF Pro Display", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  --shadow-glow: 0 0 40px rgba(139, 92, 246, 0.15),
+    0 0 80px rgba(139, 92, 246, 0.05);
+  --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-deep: 0 20px 60px rgba(0, 0, 0, 0.5),
+    0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* ─── Global Reset ─── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  font-family: var(--font-sans);
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  overflow-x: hidden;
+}
+
+/* ─── Background Mesh ─── */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(
+      ellipse 80% 60% at 20% 10%,
+      rgba(139, 92, 246, 0.08) 0%,
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 60% 50% at 80% 90%,
+      rgba(217, 70, 239, 0.06) 0%,
+      transparent 50%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 50% 50%,
+      rgba(6, 182, 212, 0.04) 0%,
+      transparent 60%
+    );
+  pointer-events: none;
+}
+
+/* Animated grid overlay */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: linear-gradient(
+      rgba(255, 255, 255, 0.015) 1px,
+      transparent 1px
+    ),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 60px 60px;
+  pointer-events: none;
+  mask-image: radial-gradient(
+    ellipse 70% 70% at 50% 50%,
+    black 0%,
+    transparent 70%
+  );
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.25);
+  border-radius: 100px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.4);
+}
+
+/* ─── Selection ─── */
+::selection {
+  background: rgba(139, 92, 246, 0.35);
+  color: white;
+}
+
+/* ─── Glass Panel ─── */
+.panel-glass {
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-elevated);
+}
+
+/* ─── 3D Elevated Panel ─── */
+.panel-3d {
+  background: linear-gradient(
+    145deg,
+    rgba(26, 26, 46, 0.9) 0%,
+    rgba(18, 18, 30, 0.95) 100%
+  );
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    var(--shadow-deep),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+.panel-3d:hover {
+  box-shadow:
+    var(--shadow-glow),
+    var(--shadow-deep),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+/* ─── Primary Button ─── */
+.button-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: white;
+  background: linear-gradient(135deg, var(--color-accent-violet), var(--color-accent-fuchsia));
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow:
+    0 4px 16px rgba(139, 92, 246, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  text-decoration: none;
+}
+
+.button-primary::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.15) 0%,
+    transparent 50%
+  );
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.button-primary:hover::before {
+  opacity: 1;
+}
+
+.button-primary:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 24px rgba(139, 92, 246, 0.4),
+    0 0 60px rgba(139, 92, 246, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.button-primary:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+}
+
+.button-primary:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  box-shadow: none;
+}
+
+/* ─── Secondary Button ─── */
+.button-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  text-decoration: none;
+}
+
+.button-secondary:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--color-border-accent);
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.1);
+  transform: translateY(-1px);
+}
+
+.button-secondary:active {
+  transform: translateY(0);
+}
+
+/* ─── Ghost Button ─── */
+.button-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.button-ghost:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ─── Input ─── */
+.input {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-family: var(--font-sans);
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: all 0.25s ease;
+}
+
+.input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.input:focus {
+  border-color: var(--color-accent-violet);
+  box-shadow:
+    0 0 0 3px rgba(139, 92, 246, 0.12),
+    0 0 20px rgba(139, 92, 246, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ─── Textarea ─── */
+.textarea {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 14px;
+  font-family: var(--font-mono);
+  line-height: 1.7;
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  outline: none;
+  resize: vertical;
+  min-height: 160px;
+  transition: all 0.25s ease;
+}
+
+.textarea:focus {
+  border-color: var(--color-accent-violet);
+  box-shadow:
+    0 0 0 3px rgba(139, 92, 246, 0.12),
+    0 0 20px rgba(139, 92, 246, 0.08);
+}
+
+/* ─── Label ─── */
+.label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+
+/* ─── Toggle Switch ─── */
+.toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 100px;
+  border: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border-radius: 50%;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.toggle:checked {
+  background: linear-gradient(135deg, var(--color-accent-violet), var(--color-accent-fuchsia));
+  border-color: transparent;
+}
+
+.toggle:checked::after {
+  transform: translateX(20px);
+}
+
+/* ─── Badge ─── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 100px;
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--color-accent-violet);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+}
+
+/* ─── Dropzone ─── */
+.dropzone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  min-height: 200px;
+  border: 2px dashed var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.01);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.dropzone:hover,
+.dropzone.active {
+  border-color: var(--color-accent-violet);
+  background: rgba(139, 92, 246, 0.04);
+  box-shadow: 0 0 40px rgba(139, 92, 246, 0.08);
+}
+
+.dropzone.active {
+  border-style: solid;
+  transform: scale(1.01);
+}
+
+/* ─── Progress Bar ─── */
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 100px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent-violet), var(--color-accent-fuchsia));
+  border-radius: 100px;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+}
+
+/* ─── Divider ─── */
+.divider {
+  height: 1px;
+  background: var(--color-border-subtle);
+  border: none;
+  margin: 0;
+}
+
+/* ─── Animations ─── */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(139, 92, 246, 0.3);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  33% {
+    transform: translateY(-8px) rotate(1deg);
+  }
+  66% {
+    transform: translateY(4px) rotate(-0.5deg);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* ─── Stagger Animation Delays ─── */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+
+/* ─── Loading Skeleton ─── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* ─── Editor Layout ─── */
+.editor-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  grid-template-rows: 56px 1fr 200px;
+  grid-template-areas:
+    "topbar topbar"
+    "sidebar preview"
+    "sidebar timeline";
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.editor-topbar {
+  grid-area: topbar;
+}
+
+.editor-sidebar {
+  grid-area: sidebar;
+}
+
+.editor-preview {
+  grid-area: preview;
+}
+
+.editor-timeline {
+  grid-area: timeline;
+}
+
+/* ─── Sonner Toast Override ─── */
+[data-sonner-toaster] {
+  --normal-bg: var(--color-surface-overlay) !important;
+  --normal-border: var(--color-border-subtle) !important;
+  --normal-text: var(--color-text-primary) !important;
+}
+
+
+================================================================================
+FILE: src/app/layout.tsx
+================================================================================
+
+import type {Metadata} from "next";
+import {Toaster} from "sonner";
+import {Providers} from "@/components/Providers";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "Lyrical Studio — AI Lyrical Video Generator",
+  description:
+    "Transcribe, align, edit, animate and export lyrical videos with precise word synchronization. Powered by Groq Whisper, NVIDIA NIM, and Remotion."
+};
+
+export default function RootLayout({
+  children
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="anonymous"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body>
+        <Providers>
+          {children}
+          <Toaster
+            position="bottom-right"
+            richColors
+            closeButton
+            toastOptions={{
+              className: "panel-glass",
+              style: {
+                background: "var(--color-surface-overlay)",
+                border: "1px solid var(--color-border-subtle)",
+                color: "var(--color-text-primary)"
+              }
+            }}
+          />
+        </Providers>
+      </body>
+    </html>
+  );
+}
+
+
+================================================================================
+FILE: src/app/onboarding/page.tsx
+================================================================================
+
+import {ApiKeyOnboarding} from "@/components/ApiKeyOnboarding";
+
+export default function OnboardingPage() {
+  return (
+    <main className="min-h-screen p-8">
+      <ApiKeyOnboarding />
+    </main>
+  );
+}
+
+
+
+================================================================================
+FILE: src/app/page.tsx
+================================================================================
+
+import {auth, signIn, signOut} from "@/auth";
+import Link from "next/link";
+
+export default async function HomePage() {
+  const session = await auth();
+
+  return (
+    <main className="grid min-h-screen place-items-center p-8">
+      <section className="panel-3d max-w-2xl p-12 text-center">
+        <div className="mb-3 text-sm font-bold uppercase tracking-[.35em] text-violet-600">
+          Lyrical Studio
+        </div>
+
+        <h1 className="text-5xl font-black tracking-tight">
+          AI lyrical videos with precise word synchronization
+        </h1>
+
+        <p className="mt-5 text-slate-600">
+          Transcribe, align, edit, animate and export from one workspace.
+        </p>
+
+        <div className="mt-8 flex justify-center gap-3">
+          <Link className="button-primary" href="/onboarding">
+            Open studio
+          </Link>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/app/upload/page.tsx
+================================================================================
+
+import {UploadAndAlign} from "@/components/UploadAndAlign";
+
+export default function UploadPage() {
+  return (
+    <main className="min-h-screen p-8">
+      <UploadAndAlign />
+    </main>
+  );
+}
+
+
+
+================================================================================
+FILE: src/auth.ts
+================================================================================
+
+export async function auth() {
+  return {
+    user: {
+      name: "Local Studio User",
+      email: "user@local.studio"
+    }
+  };
+}
+
+export const handlers = {
+  GET: async () => new Response("Auth disabled", {status: 200}),
+  POST: async () => new Response("Auth disabled", {status: 200})
+};
+
+export async function signIn() {}
+export async function signOut() {}
+
+
+
+================================================================================
+FILE: src/components/ApiKeyOnboarding.tsx
+================================================================================
+
+"use client";
+
+import {useEffect, useState} from "react";
+import {useRouter} from "next/navigation";
+import {CheckCircle2, LoaderCircle, XCircle} from "lucide-react";
+import {toast} from "sonner";
+import {apiKeyStorage} from "@/services/api-keys";
+import {soundManager} from "@/services/sound-manager";
+
+type Status = "idle" | "testing" | "valid" | "invalid";
+
+async function validateKey(provider: "groq" | "nvidia", key: string) {
+  const response = await fetch("/api/keys/validate", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({provider, key})
+  });
+
+  const body = await response.json();
+
+  if (!response.ok || !body.valid) {
+    throw new Error(body.message ?? `${provider} validation failed.`);
+  }
+}
+
+function StatusIcon({status}: {status: Status}) {
+  if (status === "testing") {
+    return <LoaderCircle className="animate-spin text-violet-600" size={18} />;
+  }
+
+  if (status === "valid") {
+    return <CheckCircle2 className="text-emerald-600" size={18} />;
+  }
+
+  if (status === "invalid") {
+    return <XCircle className="text-red-600" size={18} />;
+  }
+
+  return null;
+}
+
+export function ApiKeyOnboarding() {
+  const router = useRouter();
+  const [groq, setGroq] = useState("");
+  const [nvidia, setNvidia] = useState("");
+  const [nvidiaModel, setNvidiaModel] = useState(
+    "deepseek-ai/deepseek-v4-flash"
+  );
+  const [groqStatus, setGroqStatus] = useState<Status>("idle");
+  const [nvidiaStatus, setNvidiaStatus] = useState<Status>("idle");
+
+  useEffect(() => {
+    apiKeyStorage.get().then((saved) => {
+      if (!saved) return;
+      setGroq(saved.groq);
+      setNvidia(saved.nvidia);
+      setNvidiaModel(saved.nvidiaModel);
+    });
+  }, []);
+
+  async function save() {
+    try {
+      setGroqStatus("testing");
+      setNvidiaStatus("testing");
+
+      const results = await Promise.allSettled([
+        validateKey("groq", groq),
+        validateKey("nvidia", nvidia)
+      ]);
+
+      const groqValid = results[0].status === "fulfilled";
+      const nvidiaValid = results[1].status === "fulfilled";
+
+      setGroqStatus(groqValid ? "valid" : "invalid");
+      setNvidiaStatus(nvidiaValid ? "valid" : "invalid");
+
+      if (!groqValid || !nvidiaValid) {
+        const failure = results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected"
+        );
+
+        throw failure?.reason ?? new Error("API-key validation failed.");
+      }
+
+      await apiKeyStorage.set({groq, nvidia, nvidiaModel});
+      await soundManager.beep(720);
+
+      toast.success("API keys validated and encrypted locally.");
+      router.push("/upload");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to validate keys."
+      );
+    }
+  }
+
+  return (
+    <section className="panel-3d mx-auto max-w-2xl space-y-6 p-8 animate-fade-in">
+      <div>
+        <h1 className="text-3xl font-black">Connect your AI providers</h1>
+        <p className="mt-2 text-sm text-slate-600">
+          Keys are encrypted in this browser and sent only to authenticated
+          server endpoints when an operation is requested.
+        </p>
+      </div>
+
+      <label className="block">
+        <span className="label">Groq API key</span>
+        <div className="relative">
+          <input
+            className="input pr-11"
+            type="password"
+            autoComplete="off"
+            value={groq}
+            onChange={(event) => {
+              setGroq(event.target.value);
+              setGroqStatus("idle");
+            }}
+          />
+          <span className="absolute right-3 top-3">
+            <StatusIcon status={groqStatus} />
+          </span>
+        </div>
+      </label>
+
+      <label className="block">
+        <span className="label">NVIDIA NIM API key</span>
+        <div className="relative">
+          <input
+            className="input pr-11"
+            type="password"
+            autoComplete="off"
+            value={nvidia}
+            onChange={(event) => {
+              setNvidia(event.target.value);
+              setNvidiaStatus("idle");
+            }}
+          />
+          <span className="absolute right-3 top-3">
+            <StatusIcon status={nvidiaStatus} />
+          </span>
+        </div>
+      </label>
+
+      <label className="block">
+        <span className="label">NVIDIA model ID</span>
+        <input
+          className="input"
+          value={nvidiaModel}
+          onChange={async (event) => {
+            setNvidiaModel(event.target.value);
+            await soundManager.beep(540);
+          }}
+        />
+        <span className="mt-1 block text-xs text-slate-500">
+          Model availability can change. Use an ID listed in your NVIDIA model
+          catalog.
+        </span>
+      </label>
+
+      <button
+        className="button-primary w-full"
+        disabled={!groq || !nvidia}
+        onClick={save}
+      >
+        Validate and continue
+      </button>
+    </section>
+  );
+}
+
+
+================================================================================
+FILE: src/components/editor/EditorWorkspace.tsx
+================================================================================
+
+"use client";
+
+import {useEditorStore} from "@/stores/editor-store";
+import {TopBar} from "./TopBar";
+import {LeftPanel} from "./LeftPanel";
+import {PreviewCanvas} from "./PreviewCanvas";
+import {Timeline} from "./Timeline";
+
+export function EditorWorkspace() {
+  const project = useEditorStore((s) => s.project);
+
+  if (!project) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <div className="panel-3d p-12 text-center animate-fade-in">
+          <h2 className="text-2xl font-bold">No project loaded</h2>
+          <p className="mt-2 text-sm text-slate-500">
+            Upload audio and lyrics first to create a project.
+          </p>
+          <a href="/upload" className="button-primary mt-6 inline-block">
+            Go to upload
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="editor-grid">
+      <TopBar />
+      <LeftPanel />
+      <PreviewCanvas />
+      <Timeline />
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/components/editor/LeftPanel.tsx
+================================================================================
+
+"use client";
+
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Palette,
+  Sparkles,
+  Type
+} from "lucide-react";
+import {useEditorStore} from "@/stores/editor-store";
+import type {AnimationName} from "@/lib/editor-schema";
+import {cn} from "@/lib/cn";
+
+const ANIMATION_OPTIONS: Array<{value: AnimationName; label: string; emoji: string}> = [
+  {value: "fade", label: "Fade", emoji: "✨"},
+  {value: "slide_up", label: "Slide Up", emoji: "⬆️"},
+  {value: "pop", label: "Pop", emoji: "💥"},
+  {value: "neon_pulse", label: "Neon Pulse", emoji: "💜"},
+  {value: "zoom_blur", label: "Zoom Blur", emoji: "🔍"},
+  {value: "rain", label: "Rain", emoji: "🌧️"},
+  {value: "shake", label: "Shake", emoji: "📳"}
+];
+
+export function LeftPanel() {
+  const project = useEditorStore((s) => s.project);
+  const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
+  const selectSegment = useEditorStore((s) => s.selectSegment);
+  const setAnimation = useEditorStore((s) => s.setAnimation);
+  const patchTextStyle = useEditorStore((s) => s.patchTextStyle);
+  const setToggle = useEditorStore((s) => s.setToggle);
+
+  if (!project) return null;
+
+  const selectedSegment = project.segments.find(
+    (s) => s.id === selectedSegmentId
+  );
+
+  return (
+    <aside className="editor-sidebar flex flex-col overflow-hidden border-r border-white/5 bg-surface-raised">
+      {/* Text Style Controls */}
+      <div className="space-y-4 border-b border-white/5 p-4">
+        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+          <Type size={12} />
+          Text Style
+        </div>
+
+        {/* Font Size */}
+        <div>
+          <label className="label text-xs">Font Size</label>
+          <input
+            type="range"
+            min={20}
+            max={220}
+            step={2}
+            value={project.textStyle.fontSize}
+            onChange={(e) =>
+              patchTextStyle({fontSize: Number(e.target.value)})
+            }
+            className="w-full accent-violet-500"
+          />
+          <span className="text-xs text-slate-500">
+            {project.textStyle.fontSize}px
+          </span>
+        </div>
+
+        {/* Colors */}
+        <div className="grid grid-cols-3 gap-2">
+          <label className="block">
+            <span className="label text-xs">Text</span>
+            <input
+              type="color"
+              value={project.textStyle.color}
+              onChange={(e) => patchTextStyle({color: e.target.value})}
+              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
+            />
+          </label>
+          <label className="block">
+            <span className="label text-xs">Highlight</span>
+            <input
+              type="color"
+              value={project.textStyle.highlightColor}
+              onChange={(e) =>
+                patchTextStyle({highlightColor: e.target.value})
+              }
+              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
+            />
+          </label>
+          <label className="block">
+            <span className="label text-xs">Outline</span>
+            <input
+              type="color"
+              value={project.textStyle.outlineColor}
+              onChange={(e) =>
+                patchTextStyle({outlineColor: e.target.value})
+              }
+              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
+            />
+          </label>
+        </div>
+
+        {/* Alignment */}
+        <div className="flex gap-1">
+          {(["left", "center", "right"] as const).map((align) => (
+            <button
+              key={align}
+              className={cn(
+                "button-ghost flex-1",
+                project.textStyle.align === align && "bg-white/8 text-violet-400"
+              )}
+              onClick={() => patchTextStyle({align})}
+            >
+              {align === "left" && <AlignLeft size={14} />}
+              {align === "center" && <AlignCenter size={14} />}
+              {align === "right" && <AlignRight size={14} />}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Toggles */}
+      <div className="space-y-3 border-b border-white/5 p-4">
+        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+          <Sparkles size={12} />
+          Features
+        </div>
+
+        {(
+          [
+            ["karaokeHighlight", "Karaoke Highlight"],
+            ["beatSync", "Beat Sync"],
+            ["contextualAnimations", "AI Animations"]
+          ] as const
+        ).map(([key, label]) => (
+          <label
+            key={key}
+            className="flex items-center justify-between text-sm"
+          >
+            <span>{label}</span>
+            <input
+              type="checkbox"
+              className="toggle"
+              checked={project.toggles[key]}
+              onChange={(e) => setToggle(key, e.target.checked)}
+            />
+          </label>
+        ))}
+      </div>
+
+      {/* Segment List */}
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">
+          <Palette size={12} />
+          Segments ({project.segments.length})
+        </div>
+
+        <div className="space-y-1">
+          {project.segments.map((segment) => (
+            <div
+              key={segment.id}
+              className={cn(
+                "cursor-pointer rounded-lg border border-transparent p-3 text-sm transition-all",
+                "hover:border-white/8 hover:bg-white/3",
+                selectedSegmentId === segment.id &&
+                  "border-violet-500/30 bg-violet-500/8"
+              )}
+              onClick={() => selectSegment(segment.id)}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex-1 truncate font-medium">
+                  {segment.line}
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  {segment.start.toFixed(1)}s
+                </span>
+              </div>
+
+              {selectedSegmentId === segment.id && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {ANIMATION_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      className={cn(
+                        "rounded-md px-2 py-0.5 text-[10px] font-medium transition-all",
+                        "border border-white/8 hover:border-violet-500/30",
+                        segment.animation === opt.value &&
+                          "border-violet-500 bg-violet-500/15 text-violet-300"
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAnimation(segment.id, opt.value);
+                      }}
+                    >
+                      {opt.emoji} {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+
+================================================================================
+FILE: src/components/editor/PreviewCanvas.tsx
+================================================================================
+
+"use client";
+
+import {useEffect, useRef, useState} from "react";
+import {useEditorStore} from "@/stores/editor-store";
+import {Pause, Play, SkipBack, Volume2, VolumeX} from "lucide-react";
+
+/**
+ * Preview canvas that shows a styled lyric preview synchronized with audio.
+ * When Remotion Player is available (future enhancement), this wraps it.
+ * For now, this provides a native audio + canvas-based lyric preview.
+ */
+export function PreviewCanvas() {
+  const project = useEditorStore((s) => s.project);
+  const playhead = useEditorStore((s) => s.playhead);
+  const setPlayhead = useEditorStore((s) => s.setPlayhead);
+
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const animationRef = useRef<number | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+
+  if (!project) {
+    return (
+      <div className="editor-preview grid place-items-center bg-surface">
+        <p className="text-sm text-slate-600">No project loaded</p>
+      </div>
+    );
+  }
+
+  // Find the active segment at current playhead
+  const activeSegment = project.segments.find(
+    (s) => playhead >= s.start && playhead <= s.end
+  );
+
+  // Find the active word for karaoke highlighting
+  const activeWordIndex = activeSegment?.words.findIndex(
+    (w) => playhead >= w.start && playhead <= w.end
+  );
+
+  function togglePlay() {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      setIsPlaying(false);
+    } else {
+      audio.currentTime = playhead;
+      audio.play();
+      setIsPlaying(true);
+
+      function tick() {
+        if (audioRef.current && !audioRef.current.paused) {
+          setPlayhead(audioRef.current.currentTime);
+          animationRef.current = requestAnimationFrame(tick);
+        }
+      }
+      tick();
+    }
+  }
+
+  function handleRestart() {
+    setPlayhead(0);
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+    }
+  }
+
+  function formatTime(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  return (
+    <div className="editor-preview flex flex-col overflow-hidden bg-black/40">
+      {/* Preview viewport */}
+      <div
+        className="relative flex flex-1 items-center justify-center overflow-hidden"
+        style={{
+          backgroundColor: project.backgroundColor,
+          backgroundImage: project.backgroundUrl
+            ? `url(${project.backgroundUrl})`
+            : undefined,
+          backgroundSize: "cover",
+          backgroundPosition: "center"
+        }}
+      >
+        {/* Gradient overlay for readability */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30" />
+
+        {/* Lyric display */}
+        <div
+          className="relative z-10 max-w-[80%] px-6"
+          style={{textAlign: project.textStyle.align}}
+        >
+          {activeSegment ? (
+            <p
+              className="animate-fade-in"
+              key={activeSegment.id}
+              style={{
+                fontFamily: project.textStyle.fontFamily,
+                fontSize: `${Math.min(project.textStyle.fontSize * 0.6, 80)}px`,
+                color: project.textStyle.color,
+                textShadow: project.textStyle.shadow,
+                WebkitTextStroke: `${project.textStyle.outlineWidth * 0.5}px ${project.textStyle.outlineColor}`,
+                lineHeight: 1.3,
+                fontWeight: 800
+              }}
+            >
+              {project.toggles.karaokeHighlight
+                ? activeSegment.words.map((word, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        color:
+                          activeWordIndex !== undefined && i <= activeWordIndex
+                            ? project.textStyle.highlightColor
+                            : project.textStyle.color,
+                        transition: "color 0.1s ease"
+                      }}
+                    >
+                      {word.word}{" "}
+                    </span>
+                  ))
+                : activeSegment.line}
+            </p>
+          ) : (
+            <p
+              className="text-sm italic"
+              style={{color: "rgba(255,255,255,0.25)"}}
+            >
+              ♪ ♪ ♪
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Transport controls */}
+      <div className="flex items-center gap-3 border-t border-white/5 bg-surface-raised px-4 py-2">
+        <button className="button-ghost" onClick={handleRestart}>
+          <SkipBack size={14} />
+        </button>
+
+        <button className="button-ghost" onClick={togglePlay}>
+          {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+        </button>
+
+        <button
+          className="button-ghost"
+          onClick={() => {
+            setIsMuted(!isMuted);
+            if (audioRef.current) audioRef.current.muted = !isMuted;
+          }}
+        >
+          {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+        </button>
+
+        <div className="flex-1" />
+
+        <span className="font-mono text-xs text-slate-500">
+          {formatTime(playhead)} / {formatTime(project.duration)}
+        </span>
+      </div>
+
+      {/* Hidden audio element */}
+      <audio
+        ref={audioRef}
+        src={project.audioUrl}
+        preload="auto"
+        onEnded={() => {
+          setIsPlaying(false);
+          if (animationRef.current) cancelAnimationFrame(animationRef.current);
+        }}
+      />
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/components/editor/Timeline.tsx
+================================================================================
+
+"use client";
+
+import {useCallback, useRef, useState} from "react";
+import {useEditorStore} from "@/stores/editor-store";
+import {Waveform} from "./Waveform";
+import {cn} from "@/lib/cn";
+
+const PIXELS_PER_SECOND = 80;
+const TRACK_HEIGHT = 36;
+
+export function Timeline() {
+  const project = useEditorStore((s) => s.project);
+  const playhead = useEditorStore((s) => s.playhead);
+  const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
+  const setPlayhead = useEditorStore((s) => s.setPlayhead);
+  const selectSegment = useEditorStore((s) => s.selectSegment);
+  const moveSegment = useEditorStore((s) => s.moveSegment);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<{
+    id: string;
+    offsetX: number;
+    startTime: number;
+    endTime: number;
+  } | null>(null);
+
+  if (!project) return null;
+
+  const totalWidth = Math.max(
+    project.duration * PIXELS_PER_SECOND,
+    800
+  );
+
+  // Time ruler ticks
+  const ticks: number[] = [];
+  for (let t = 0; t <= project.duration; t += 1) {
+    ticks.push(t);
+  }
+
+  function timeToX(time: number): number {
+    return time * PIXELS_PER_SECOND;
+  }
+
+  function xToTime(x: number): number {
+    return Math.max(0, x / PIXELS_PER_SECOND);
+  }
+
+  function handleMouseDown(
+    e: React.MouseEvent,
+    segId: string,
+    start: number,
+    end: number
+  ) {
+    e.stopPropagation();
+    selectSegment(segId);
+
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    setDragging({
+      id: segId,
+      offsetX: e.clientX - rect.left,
+      startTime: start,
+      endTime: end
+    });
+  }
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!dragging || !scrollRef.current) return;
+
+      const scrollRect = scrollRef.current.getBoundingClientRect();
+      const x = e.clientX - scrollRect.left + scrollRef.current.scrollLeft;
+      const newStart = xToTime(x - dragging.offsetX);
+      const duration = dragging.endTime - dragging.startTime;
+
+      moveSegment(dragging.id, newStart, newStart + duration);
+    },
+    [dragging, moveSegment]
+  );
+
+  function handleMouseUp() {
+    setDragging(null);
+  }
+
+  function handleTimelineClick(e: React.MouseEvent) {
+    if (!scrollRef.current) return;
+    const scrollRect = scrollRef.current.getBoundingClientRect();
+    const x =
+      e.clientX - scrollRect.left + scrollRef.current.scrollLeft;
+    setPlayhead(xToTime(x));
+  }
+
+  return (
+    <div
+      className="editor-timeline flex flex-col overflow-hidden border-t border-white/5 bg-surface-raised"
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+    >
+      {/* Waveform strip */}
+      <div className="h-14 border-b border-white/5">
+        <Waveform
+          audioUrl={project.audioUrl}
+          playhead={playhead}
+          duration={project.duration}
+          beats={project.toggles.beatSync ? project.beats : []}
+          onSeek={setPlayhead}
+        />
+      </div>
+
+      {/* Timeline tracks */}
+      <div
+        ref={scrollRef}
+        className="relative flex-1 overflow-x-auto overflow-y-hidden"
+        onClick={handleTimelineClick}
+      >
+        <div
+          className="relative"
+          style={{
+            width: totalWidth,
+            minHeight: TRACK_HEIGHT + 40
+          }}
+        >
+          {/* Time ruler */}
+          <div className="sticky top-0 z-10 flex h-5 border-b border-white/5 bg-surface-raised/80 backdrop-blur-sm">
+            {ticks.map((t) => (
+              <div
+                key={t}
+                className="absolute top-0 flex h-full items-end"
+                style={{left: timeToX(t)}}
+              >
+                <div className="h-2 w-px bg-white/15" />
+                {t % 5 === 0 && (
+                  <span className="ml-1 text-[9px] text-slate-600">
+                    {Math.floor(t / 60)}:{String(Math.floor(t % 60)).padStart(2, "0")}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Segment blocks */}
+          <div className="relative mt-1" style={{height: TRACK_HEIGHT}}>
+            {project.segments.map((segment) => {
+              const left = timeToX(segment.start);
+              const width = Math.max(
+                timeToX(segment.end - segment.start),
+                20
+              );
+
+              return (
+                <div
+                  key={segment.id}
+                  className={cn(
+                    "absolute top-0 flex cursor-grab items-center overflow-hidden rounded-md border px-2 text-[10px] font-medium transition-colors select-none",
+                    "border-violet-500/20 bg-violet-500/10 text-violet-200",
+                    "hover:border-violet-500/40 hover:bg-violet-500/15",
+                    selectedSegmentId === segment.id &&
+                      "border-violet-500/60 bg-violet-500/20 ring-1 ring-violet-500/30",
+                    dragging?.id === segment.id && "cursor-grabbing opacity-80"
+                  )}
+                  style={{
+                    left,
+                    width,
+                    height: TRACK_HEIGHT
+                  }}
+                  onMouseDown={(e) =>
+                    handleMouseDown(e, segment.id, segment.start, segment.end)
+                  }
+                >
+                  <span className="truncate">{segment.line}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Beat markers */}
+          {project.toggles.beatSync &&
+            project.beats.map((beat, i) => (
+              <div
+                key={i}
+                className="absolute top-5 h-full w-px bg-cyan-500/15"
+                style={{left: timeToX(beat)}}
+              />
+            ))}
+
+          {/* Playhead line */}
+          <div
+            className="absolute top-0 z-20 h-full w-0.5 bg-violet-500"
+            style={{left: timeToX(playhead)}}
+          >
+            <div className="absolute -left-1.5 -top-0.5 h-2.5 w-3.5 rounded-sm bg-violet-500" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/components/editor/TopBar.tsx
+================================================================================
+
+"use client";
+
+import {
+  Download,
+  Film,
+  LoaderCircle,
+  Monitor,
+  Settings2,
+  Sparkles
+} from "lucide-react";
+import {toast} from "sonner";
+import {useEditorStore} from "@/stores/editor-store";
+import {apiKeyStorage} from "@/services/api-keys";
+import {cn} from "@/lib/cn";
+
+export function TopBar() {
+  const project = useEditorStore((s) => s.project);
+  const isExporting = useEditorStore((s) => s.isExporting);
+  const exportProgress = useEditorStore((s) => s.exportProgress);
+  const setResolution = useEditorStore((s) => s.setResolution);
+  const setExportState = useEditorStore((s) => s.setExportState);
+  const setToggle = useEditorStore((s) => s.setToggle);
+  const setSegments = useEditorStore((s) => s.setSegments);
+
+  if (!project) return null;
+
+  const is1080 = project.width === 1920;
+
+  async function handleContextualAnimations() {
+    if (!project) return;
+
+    const credentials = await apiKeyStorage.get();
+    if (!credentials) {
+      toast.error("API keys not found.");
+      return;
+    }
+
+    toast.info("Generating contextual animations...");
+
+    try {
+      const response = await fetch("/api/nvidia/animations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-nvidia-key": credentials.nvidia
+        },
+        body: JSON.stringify({
+          model: credentials.nvidiaModel,
+          lines: project.segments.map((s) => ({id: s.id, line: s.line}))
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message);
+      }
+
+      const {animations} = await response.json();
+      const updated = project.segments.map((seg) => {
+        const match = animations.find(
+          (a: {id: string; animation: string}) => a.id === seg.id
+        );
+        return match ? {...seg, animation: match.animation} : seg;
+      });
+
+      setSegments(updated);
+      setToggle("contextualAnimations", true);
+      toast.success("Contextual animations applied!");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Animation generation failed."
+      );
+    }
+  }
+
+  async function handleExport() {
+    if (!project) return;
+
+    setExportState(true, 0);
+
+    try {
+      const response = await fetch("/api/export", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({project})
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message);
+      }
+
+      const result = await response.json();
+      setExportState(false, 100);
+      toast.success(
+        `Rendered in ${(result.durationMs / 1000).toFixed(1)}s`
+      );
+
+      // Open download
+      window.open(result.url, "_blank");
+    } catch (error) {
+      setExportState(false, 0);
+      toast.error(
+        error instanceof Error ? error.message : "Export failed."
+      );
+    }
+  }
+
+  return (
+    <header className="editor-topbar flex items-center justify-between border-b border-white/5 bg-surface-raised px-4">
+      <div className="flex items-center gap-3">
+        <Film size={18} className="text-violet-500" />
+        <span className="text-sm font-bold tracking-tight">
+          {project.title}
+        </span>
+        <span className="badge">{project.fps} FPS</span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        {/* Resolution toggle */}
+        <button
+          className={cn(
+            "button-ghost text-xs",
+            is1080 && "text-violet-400"
+          )}
+          onClick={() => setResolution(is1080 ? "720p" : "1080p")}
+        >
+          <Monitor size={14} />
+          {is1080 ? "1080p" : "720p"}
+        </button>
+
+        {/* AI Animations */}
+        <button
+          className="button-ghost text-xs"
+          onClick={handleContextualAnimations}
+        >
+          <Sparkles size={14} />
+          AI Animations
+        </button>
+
+        {/* Export */}
+        <button
+          className="button-primary text-xs"
+          disabled={isExporting}
+          onClick={handleExport}
+        >
+          {isExporting ? (
+            <>
+              <LoaderCircle size={14} className="animate-spin" />
+              {Math.round(exportProgress)}%
+            </>
+          ) : (
+            <>
+              <Download size={14} />
+              Export MP4
+            </>
+          )}
+        </button>
+      </div>
+    </header>
+  );
+}
+
+
+================================================================================
+FILE: src/components/editor/Waveform.tsx
+================================================================================
+
+"use client";
+
+import {useEffect, useRef} from "react";
+
+type WaveformProps = {
+  audioUrl: string;
+  playhead: number;
+  duration: number;
+  beats?: number[];
+  onSeek: (time: number) => void;
+};
+
+export function Waveform({audioUrl, playhead, duration, beats = [], onSeek}: WaveformProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const waveformData = useRef<Float32Array | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Decode audio and extract waveform data
+  useEffect(() => {
+    let cancelled = false;
+
+    async function decode() {
+      try {
+        const response = await fetch(audioUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const context = new AudioContext();
+        const buffer = await context.decodeAudioData(arrayBuffer);
+        const channel = buffer.getChannelData(0);
+
+        // Downsample to ~2000 points for rendering
+        const targetPoints = 2000;
+        const step = Math.max(1, Math.floor(channel.length / targetPoints));
+        const sampled = new Float32Array(Math.ceil(channel.length / step));
+
+        for (let i = 0; i < sampled.length; i++) {
+          let max = 0;
+          const start = i * step;
+          const end = Math.min(start + step, channel.length);
+          for (let j = start; j < end; j++) {
+            const abs = Math.abs(channel[j]);
+            if (abs > max) max = abs;
+          }
+          sampled[i] = max;
+        }
+
+        if (!cancelled) {
+          waveformData.current = sampled;
+        }
+
+        await context.close();
+      } catch {
+        // Waveform display is non-critical
+      }
+    }
+
+    decode();
+    return () => {
+      cancelled = true;
+    };
+  }, [audioUrl]);
+
+  // Render waveform
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const data = waveformData.current;
+    if (!canvas || !data) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+
+    const w = rect.width;
+    const h = rect.height;
+    const mid = h / 2;
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Draw waveform bars
+    const barWidth = Math.max(1, w / data.length);
+
+    for (let i = 0; i < data.length; i++) {
+      const x = (i / data.length) * w;
+      const barHeight = data[i] * mid * 0.85;
+      const progress = x / w;
+      const playedProgress = duration > 0 ? playhead / duration : 0;
+
+      if (progress <= playedProgress) {
+        ctx.fillStyle = "rgba(139, 92, 246, 0.8)";
+      } else {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+      }
+
+      ctx.fillRect(x, mid - barHeight, barWidth - 0.5, barHeight * 2);
+    }
+
+    // Draw beat markers
+    if (beats.length > 0) {
+      ctx.strokeStyle = "rgba(6, 182, 212, 0.25)";
+      ctx.lineWidth = 1;
+
+      for (const beat of beats) {
+        const x = (beat / duration) * w;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+    }
+
+    // Draw playhead
+    const playheadX = (playhead / Math.max(duration, 0.01)) * w;
+    ctx.strokeStyle = "#8b5cf6";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(playheadX, 0);
+    ctx.lineTo(playheadX, h);
+    ctx.stroke();
+
+    // Playhead glow
+    const gradient = ctx.createRadialGradient(
+      playheadX, mid, 0,
+      playheadX, mid, 20
+    );
+    gradient.addColorStop(0, "rgba(139, 92, 246, 0.3)");
+    gradient.addColorStop(1, "rgba(139, 92, 246, 0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(playheadX - 20, 0, 40, h);
+  });
+
+  function handleClick(e: React.MouseEvent) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || duration <= 0) return;
+
+    const x = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, x / rect.width));
+    onSeek(ratio * duration);
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative h-full cursor-crosshair"
+      onClick={handleClick}
+    >
+      <canvas
+        ref={canvasRef}
+        className="h-full w-full"
+        style={{display: "block"}}
+      />
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/components/FloatingOrb.tsx
+================================================================================
+
+"use client";
+
+import {useEffect, useRef} from "react";
+
+/**
+ * Animated floating orb decoration using pure canvas rendering.
+ * Provides a subtle ambient glow effect in the background.
+ */
+export function FloatingOrb() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let animationId: number;
+    let time = 0;
+
+    function resize() {
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = window.innerWidth * dpr;
+      canvas.height = window.innerHeight * dpr;
+      ctx!.scale(dpr, dpr);
+    }
+
+    resize();
+    window.addEventListener("resize", resize);
+
+    function draw() {
+      if (!canvas || !ctx) return;
+
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+
+      ctx.clearRect(0, 0, w, h);
+      time += 0.003;
+
+      // Primary orb
+      const x1 = w * 0.3 + Math.sin(time * 0.7) * w * 0.15;
+      const y1 = h * 0.3 + Math.cos(time * 0.5) * h * 0.1;
+      const r1 = Math.min(w, h) * 0.25;
+
+      const gradient1 = ctx.createRadialGradient(x1, y1, 0, x1, y1, r1);
+      gradient1.addColorStop(0, "rgba(139, 92, 246, 0.06)");
+      gradient1.addColorStop(0.5, "rgba(139, 92, 246, 0.02)");
+      gradient1.addColorStop(1, "rgba(139, 92, 246, 0)");
+
+      ctx.fillStyle = gradient1;
+      ctx.fillRect(0, 0, w, h);
+
+      // Secondary orb
+      const x2 = w * 0.7 + Math.cos(time * 0.6) * w * 0.12;
+      const y2 = h * 0.7 + Math.sin(time * 0.8) * h * 0.08;
+      const r2 = Math.min(w, h) * 0.2;
+
+      const gradient2 = ctx.createRadialGradient(x2, y2, 0, x2, y2, r2);
+      gradient2.addColorStop(0, "rgba(217, 70, 239, 0.04)");
+      gradient2.addColorStop(0.5, "rgba(217, 70, 239, 0.015)");
+      gradient2.addColorStop(1, "rgba(217, 70, 239, 0)");
+
+      ctx.fillStyle = gradient2;
+      ctx.fillRect(0, 0, w, h);
+
+      // Tertiary orb
+      const x3 = w * 0.5 + Math.sin(time * 0.9 + 2) * w * 0.2;
+      const y3 = h * 0.5 + Math.cos(time * 0.4 + 1) * h * 0.15;
+      const r3 = Math.min(w, h) * 0.18;
+
+      const gradient3 = ctx.createRadialGradient(x3, y3, 0, x3, y3, r3);
+      gradient3.addColorStop(0, "rgba(6, 182, 212, 0.03)");
+      gradient3.addColorStop(1, "rgba(6, 182, 212, 0)");
+
+      ctx.fillStyle = gradient3;
+      ctx.fillRect(0, 0, w, h);
+
+      animationId = requestAnimationFrame(draw);
+    }
+
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animationId);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="pointer-events-none fixed inset-0 z-0"
+      style={{
+        width: "100vw",
+        height: "100vh"
+      }}
+      aria-hidden
+    />
+  );
+}
+
+
+================================================================================
+FILE: src/components/Providers.tsx
+================================================================================
+
+"use client";
+
+export function Providers({children}: {children: React.ReactNode}) {
+  return <>{children}</>;
+}
+
+
+
+================================================================================
+FILE: src/components/UploadAndAlign.tsx
+================================================================================
+
+"use client";
+
+import {useCallback, useRef, useState} from "react";
+import {useRouter} from "next/navigation";
+import {
+  CloudUpload,
+  FileAudio,
+  LoaderCircle,
+  Music2,
+  Sparkles
+} from "lucide-react";
+import {toast} from "sonner";
+import {apiKeyStorage} from "@/services/api-keys";
+import {uploadAsset} from "@/services/asset-client";
+import {detectBeats} from "@/lib/beat-detection";
+import {soundManager} from "@/services/sound-manager";
+import {useEditorStore, createProject} from "@/stores/editor-store";
+import {cn} from "@/lib/cn";
+
+type Stage = "idle" | "uploading" | "transcribing" | "analyzing" | "done";
+
+export function UploadAndAlign() {
+  const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [lyrics, setLyrics] = useState("");
+  const [stage, setStage] = useState<Stage>("idle");
+  const [progress, setProgress] = useState(0);
+  const [dragActive, setDragActive] = useState(false);
+  const loadProject = useEditorStore((s) => s.loadProject);
+
+  const handleFile = useCallback((file: File) => {
+    if (!file.type.startsWith("audio/")) {
+      toast.error("Please select an audio file.");
+      return;
+    }
+    setAudioFile(file);
+    soundManager.beep(660);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragActive(false);
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
+    },
+    [handleFile]
+  );
+
+  async function process() {
+    if (!audioFile || !lyrics.trim()) {
+      toast.error("Audio file and lyrics are both required.");
+      return;
+    }
+
+    const credentials = await apiKeyStorage.get();
+    if (!credentials) {
+      toast.error("API keys not found. Please complete onboarding first.");
+      router.push("/onboarding");
+      return;
+    }
+
+    try {
+      // Step 1: Upload audio asset
+      setStage("uploading");
+      setProgress(15);
+      const audioUrl = await uploadAsset(audioFile);
+      setProgress(30);
+
+      // Step 2: Transcribe and align
+      setStage("transcribing");
+      setProgress(45);
+
+      const formData = new FormData();
+      formData.append("audio", audioFile);
+      formData.append("lyrics", lyrics);
+
+      const transcriptionResponse = await fetch("/api/transcription", {
+        method: "POST",
+        headers: {"x-groq-key": credentials.groq},
+        body: formData
+      });
+
+      if (!transcriptionResponse.ok) {
+        const err = await transcriptionResponse.json();
+        throw new Error(err.message ?? "Transcription failed.");
+      }
+
+      const transcription = await transcriptionResponse.json();
+      setProgress(70);
+
+      // Step 3: Beat detection
+      setStage("analyzing");
+      setProgress(80);
+
+      let beats: number[] = [];
+      try {
+        const beatResult = await detectBeats(audioFile);
+        beats = beatResult.beats;
+        toast.success(`Detected ~${beatResult.bpm} BPM`);
+      } catch {
+        toast.warning("Beat detection was not available for this file.");
+      }
+
+      setProgress(95);
+
+      // Step 4: Create project
+      const project = createProject({
+        audioUrl,
+        duration: transcription.duration,
+        segments: transcription.segments,
+        beats
+      });
+
+      loadProject(project);
+      setStage("done");
+      setProgress(100);
+
+      await soundManager.beep(880);
+      toast.success("Project ready! Opening editor...");
+
+      setTimeout(() => router.push("/editor"), 600);
+    } catch (error) {
+      setStage("idle");
+      setProgress(0);
+      toast.error(
+        error instanceof Error ? error.message : "Processing failed."
+      );
+    }
+  }
+
+  const isProcessing = stage !== "idle" && stage !== "done";
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6 animate-fade-in">
+      {/* Header */}
+      <div className="text-center">
+        <div className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-[.3em] text-violet-500">
+          <Music2 size={16} />
+          Upload &amp; Align
+        </div>
+        <h1 className="mt-2 text-4xl font-black tracking-tight">
+          Create your lyrical video
+        </h1>
+        <p className="mt-2 text-sm text-slate-500">
+          Drop your audio, paste the lyrics, and let AI handle the rest.
+        </p>
+      </div>
+
+      {/* Audio Dropzone */}
+      <div
+        className={cn("dropzone", dragActive && "active")}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragActive(true);
+        }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="audio/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleFile(file);
+          }}
+        />
+
+        {audioFile ? (
+          <>
+            <FileAudio size={40} className="text-emerald-500" />
+            <div className="text-center">
+              <p className="font-semibold">{audioFile.name}</p>
+              <p className="text-xs text-slate-500">
+                {(audioFile.size / (1024 * 1024)).toFixed(1)} MB
+              </p>
+            </div>
+            <button
+              className="button-ghost text-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                setAudioFile(null);
+              }}
+            >
+              Remove
+            </button>
+          </>
+        ) : (
+          <>
+            <CloudUpload size={40} className="text-violet-500" />
+            <div className="text-center">
+              <p className="font-semibold">
+                Drop your audio file here
+              </p>
+              <p className="text-xs text-slate-500">
+                MP3, WAV, FLAC, OGG, WebM — up to 100 MB
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Lyrics Input */}
+      <div>
+        <label className="label">Lyrics</label>
+        <textarea
+          className="textarea"
+          rows={10}
+          placeholder={
+            "Paste your lyrics here, one line per lyric line...\n\nVerse 1:\nI've been waiting for the light\nTo break through the endless night"
+          }
+          value={lyrics}
+          onChange={(e) => setLyrics(e.target.value)}
+          disabled={isProcessing}
+        />
+        <div className="mt-1 flex justify-between text-xs text-slate-500">
+          <span>
+            {lyrics.split(/\r?\n/).filter((l) => l.trim()).length} lines
+          </span>
+          <span>{lyrics.length} characters</span>
+        </div>
+      </div>
+
+      {/* Progress */}
+      {isProcessing && (
+        <div className="space-y-3 animate-fade-in">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <LoaderCircle size={16} className="animate-spin text-violet-500" />
+            <span>
+              {stage === "uploading" && "Uploading audio..."}
+              {stage === "transcribing" && "Transcribing & aligning lyrics..."}
+              {stage === "analyzing" && "Detecting beats..."}
+            </span>
+          </div>
+          <div className="progress-track">
+            <div
+              className="progress-fill"
+              style={{width: `${progress}%`}}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Submit */}
+      <button
+        className="button-primary w-full"
+        disabled={!audioFile || !lyrics.trim() || isProcessing}
+        onClick={process}
+      >
+        <Sparkles size={16} />
+        {isProcessing ? "Processing..." : "Transcribe & align"}
+      </button>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: src/lib/alignment.ts
+================================================================================
+
+import type {GroqWord} from "@/services/groq";
+import type {LyricSegment, TimedWord} from "./editor-schema";
+
+type LyricToken = {
+  original: string;
+  normalized: string;
+  lineIndex: number;
+};
+
+function normalize(value: string): string {
+  return value
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{Mark}/gu, "")
+    .replace(/[^\p{Letter}\p{Number}']/gu, "");
+}
+
+function tokenizeLyrics(lines: string[]): LyricToken[] {
+  return lines.flatMap((line, lineIndex) =>
+    line
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((original) => ({
+        original,
+        normalized: normalize(original),
+        lineIndex
+      }))
+  );
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  let previous = Array.from({length: b.length + 1}, (_, index) => index);
+
+  for (let row = 1; row <= a.length; row++) {
+    const current = [row];
+
+    for (let column = 1; column <= b.length; column++) {
+      current[column] = Math.min(
+        current[column - 1] + 1,
+        previous[column] + 1,
+        previous[column - 1] +
+          (a[row - 1] === b[column - 1] ? 0 : 1)
+      );
+    }
+
+    previous = current;
+  }
+
+  return previous[b.length];
+}
+
+function substitutionCost(a: string, b: string): number {
+  if (a === b) return 0;
+
+  const maxLength = Math.max(a.length, b.length, 1);
+  const ratio = levenshtein(a, b) / maxLength;
+
+  if (ratio <= 0.2) return 0.2;
+  if (ratio <= 0.4) return 0.55;
+  return 1.35;
+}
+
+/**
+ * Returns one Whisper-word index per lyric token.
+ * null means that the lyric token had no reliable transcription counterpart.
+ */
+function globalAlign(
+  lyricTokens: LyricToken[],
+  whisperWords: GroqWord[]
+): Array<number | null> {
+  const n = lyricTokens.length;
+  const m = whisperWords.length;
+  const gapLyric = 0.9;
+  const gapWhisper = 0.65;
+
+  const scores = Array.from({length: n + 1}, () =>
+    Array<number>(m + 1).fill(0)
+  );
+
+  const moves = Array.from({length: n + 1}, () =>
+    Array<"diag" | "up" | "left" | null>(m + 1).fill(null)
+  );
+
+  for (let i = 1; i <= n; i++) {
+    scores[i][0] = i * gapLyric;
+    moves[i][0] = "up";
+  }
+
+  for (let j = 1; j <= m; j++) {
+    scores[0][j] = j * gapWhisper;
+    moves[0][j] = "left";
+  }
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const diagonal =
+        scores[i - 1][j - 1] +
+        substitutionCost(
+          lyricTokens[i - 1].normalized,
+          normalize(whisperWords[j - 1].word)
+        );
+
+      const up = scores[i - 1][j] + gapLyric;
+      const left = scores[i][j - 1] + gapWhisper;
+      const minimum = Math.min(diagonal, up, left);
+
+      scores[i][j] = minimum;
+      moves[i][j] =
+        minimum === diagonal ? "diag" : minimum === up ? "up" : "left";
+    }
+  }
+
+  const mapping: Array<number | null> = Array(n).fill(null);
+
+  let i = n;
+  let j = m;
+
+  while (i > 0 || j > 0) {
+    const move = moves[i][j];
+
+    if (move === "diag") {
+      const cost = substitutionCost(
+        lyricTokens[i - 1].normalized,
+        normalize(whisperWords[j - 1].word)
+      );
+
+      if (cost <= 0.9) mapping[i - 1] = j - 1;
+
+      i--;
+      j--;
+    } else if (move === "up") {
+      i--;
+    } else {
+      j--;
+    }
+  }
+
+  return mapping;
+}
+
+function estimateTokenTime(
+  tokenIndex: number,
+  mapping: Array<number | null>,
+  words: GroqWord[]
+): {start: number; end: number} {
+  const mapped = mapping[tokenIndex];
+
+  if (mapped !== null) {
+    return {
+      start: words[mapped].start,
+      end: words[mapped].end
+    };
+  }
+
+  let previousToken = tokenIndex - 1;
+  let nextToken = tokenIndex + 1;
+
+  while (previousToken >= 0 && mapping[previousToken] === null) {
+    previousToken--;
+  }
+
+  while (nextToken < mapping.length && mapping[nextToken] === null) {
+    nextToken++;
+  }
+
+  const previousWord =
+    previousToken >= 0 && mapping[previousToken] !== null
+      ? words[mapping[previousToken]!]
+      : undefined;
+
+  const nextWord =
+    nextToken < mapping.length && mapping[nextToken] !== null
+      ? words[mapping[nextToken]!]
+      : undefined;
+
+  if (previousWord && nextWord) {
+    const missingCount = nextToken - previousToken;
+    const position = tokenIndex - previousToken;
+    const step = (nextWord.start - previousWord.end) / missingCount;
+    const start = previousWord.end + step * (position - 1);
+
+    return {
+      start,
+      end: Math.max(start + 0.08, start + Math.max(step * 0.8, 0.08))
+    };
+  }
+
+  if (previousWord) {
+    const start = previousWord.end + 0.05 * (tokenIndex - previousToken);
+    return {start, end: start + 0.16};
+  }
+
+  if (nextWord) {
+    const distance = nextToken - tokenIndex;
+    const end = Math.max(0.1, nextWord.start - 0.05 * distance);
+    return {start: Math.max(0, end - 0.16), end};
+  }
+
+  const start = tokenIndex * 0.25;
+  return {start, end: start + 0.2};
+}
+
+export function alignLyricsToWords(
+  rawLyrics: string,
+  whisperWords: GroqWord[]
+): LyricSegment[] {
+  const lines = rawLyrics
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) throw new Error("No lyric lines were provided.");
+  if (!whisperWords.length) throw new Error("No timed words were returned.");
+
+  const lyricTokens = tokenizeLyrics(lines);
+  const mapping = globalAlign(lyricTokens, whisperWords);
+
+  return lines.map((line, lineIndex) => {
+    const indexedTokens = lyricTokens
+      .map((token, index) => ({token, index}))
+      .filter(({token}) => token.lineIndex === lineIndex);
+
+    const words: TimedWord[] = indexedTokens.map(({token, index}) => ({
+      word: token.original,
+      ...estimateTokenTime(index, mapping, whisperWords)
+    }));
+
+    const start =
+      words.length > 0
+        ? Math.max(0, Math.min(...words.map((word) => word.start)) - 0.04)
+        : 0;
+
+    const end =
+      words.length > 0
+        ? Math.max(...words.map((word) => word.end)) + 0.08
+        : start + 1;
+
+    return {
+      id: crypto.randomUUID(),
+      line,
+      start,
+      end: Math.max(start + 0.1, end),
+      words,
+      animation: lineIndex % 3 === 0 ? "pop" : "fade"
+    };
+  });
+}
+
+
+================================================================================
+FILE: src/lib/api-error.ts
+================================================================================
+
+/**
+ * Standardized API error response helper.
+ */
+export function apiError(
+  message: string,
+  status: number = 500
+): Response {
+  return Response.json({message}, {status});
+}
+
+/**
+ * Wraps an async API handler to catch and format errors consistently.
+ */
+export async function withApiErrorHandling(
+  handler: () => Promise<Response>
+): Promise<Response> {
+  try {
+    return await handler();
+  } catch (error) {
+    if (error instanceof Response) return error;
+
+    console.error("API error:", error);
+
+    return apiError(
+      error instanceof Error ? error.message : "An unexpected error occurred.",
+      500
+    );
+  }
+}
+
+
+================================================================================
+FILE: src/lib/auth-guard.ts
+================================================================================
+
+export async function requireUser() {
+  return {
+    name: "Local Studio User",
+    email: "user@local.studio"
+  };
+}
+
+
+
+================================================================================
+FILE: src/lib/beat-detection.ts
+================================================================================
+
+export type BeatAnalysis = {
+  bpm: number;
+  beats: number[];
+};
+
+export async function detectBeats(file: File): Promise<BeatAnalysis> {
+  const context = new AudioContext();
+  const buffer = await context.decodeAudioData(await file.arrayBuffer());
+  const channel = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+
+  const windowSize = 1024;
+  const hop = 512;
+  const energies: number[] = [];
+
+  for (let start = 0; start + windowSize < channel.length; start += hop) {
+    let energy = 0;
+
+    for (let index = start; index < start + windowSize; index++) {
+      energy += channel[index] * channel[index];
+    }
+
+    energies.push(Math.sqrt(energy / windowSize));
+  }
+
+  const novelty = energies.map((value, index) =>
+    Math.max(0, value - (energies[index - 1] ?? value))
+  );
+
+  const mean = novelty.reduce((sum, value) => sum + value, 0) /
+    Math.max(1, novelty.length);
+
+  const variance =
+    novelty.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+    Math.max(1, novelty.length);
+
+  const threshold = mean + Math.sqrt(variance) * 1.25;
+  const candidateBeats: number[] = [];
+  const minimumGap = 0.22;
+
+  for (let index = 1; index < novelty.length - 1; index++) {
+    const time = (index * hop) / sampleRate;
+
+    if (
+      novelty[index] > threshold &&
+      novelty[index] >= novelty[index - 1] &&
+      novelty[index] >= novelty[index + 1] &&
+      time - (candidateBeats.at(-1) ?? -Infinity) >= minimumGap
+    ) {
+      candidateBeats.push(time);
+    }
+  }
+
+  const intervals = candidateBeats
+    .slice(1)
+    .map((beat, index) => beat - candidateBeats[index])
+    .filter((interval) => interval >= 0.25 && interval <= 1.5);
+
+  const medianInterval =
+    intervals.sort((a, b) => a - b)[Math.floor(intervals.length / 2)] ?? 0.5;
+
+  let bpm = 60 / medianInterval;
+
+  while (bpm < 70) bpm *= 2;
+  while (bpm > 180) bpm /= 2;
+
+  await context.close();
+
+  return {
+    bpm: Math.round(bpm),
+    beats: candidateBeats
+  };
+}
+
+
+================================================================================
+FILE: src/lib/cn.ts
+================================================================================
+
+export function cn(
+  ...inputs: Array<string | boolean | undefined | null>
+): string {
+  return inputs.filter(Boolean).join(" ");
+}
+
+
+================================================================================
+FILE: src/lib/editor-schema.ts
+================================================================================
+
+import {z} from "zod";
+
+export const animationSchema = z.enum([
+  "fade",
+  "slide_up",
+  "pop",
+  "neon_pulse",
+  "zoom_blur",
+  "rain",
+  "shake"
+]);
+
+export type AnimationName = z.infer<typeof animationSchema>;
+
+export const timedWordSchema = z.object({
+  word: z.string(),
+  start: z.number().nonnegative(),
+  end: z.number().nonnegative()
+});
+
+export type TimedWord = z.infer<typeof timedWordSchema>;
+
+export const lyricSegmentSchema = z.object({
+  id: z.string(),
+  line: z.string(),
+  start: z.number().nonnegative(),
+  end: z.number().nonnegative(),
+  words: z.array(timedWordSchema),
+  animation: animationSchema.default("fade")
+});
+
+export type LyricSegment = z.infer<typeof lyricSegmentSchema>;
+
+export const textStyleSchema = z.object({
+  fontFamily: z.string().default("Inter"),
+  fontUrl: z.string().url().optional(),
+  fontSize: z.number().min(20).max(220).default(84),
+  color: z.string().default("#ffffff"),
+  highlightColor: z.string().default("#fde047"),
+  outlineColor: z.string().default("#111827"),
+  outlineWidth: z.number().min(0).max(12).default(2),
+  shadow: z.string().default("0 8px 26px rgba(0,0,0,.5)"),
+  align: z.enum(["left", "center", "right"]).default("center")
+});
+
+export const projectSchema = z.object({
+  version: z.literal(1),
+  title: z.string().default("Untitled lyrical video"),
+  fps: z.number().int().min(24).max(60).default(30),
+  width: z.union([z.literal(1280), z.literal(1920)]).default(1920),
+  height: z.union([z.literal(720), z.literal(1080)]).default(1080),
+  duration: z.number().positive(),
+  audioUrl: z.string().url(),
+  backgroundUrl: z.string().url().optional(),
+  backgroundColor: z.string().default("#111827"),
+  segments: z.array(lyricSegmentSchema),
+  beats: z.array(z.number().nonnegative()).default([]),
+  textStyle: textStyleSchema,
+  toggles: z.object({
+    beatSync: z.boolean().default(false),
+    contextualAnimations: z.boolean().default(false),
+    karaokeHighlight: z.boolean().default(true)
+  })
+});
+
+export type EditorProject = z.infer<typeof projectSchema>;
+
+export const defaultTextStyle = textStyleSchema.parse({});
+
+
+================================================================================
+FILE: src/lib/id.ts
+================================================================================
+
+let counter = 0;
+
+/**
+ * Generates a unique identifier.
+ * Uses crypto.randomUUID when available, falls back to a timestamp + counter.
+ */
+export function generateId(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  counter += 1;
+  return `${Date.now().toString(36)}-${counter.toString(36)}`;
+}
+
+
+================================================================================
+FILE: src/lib/sanitize.ts
+================================================================================
+
+/**
+ * Strips HTML tags and collapses whitespace to prevent injection
+ * in user-supplied text that is rendered or logged.
+ */
+export function sanitizeText(input: string): string {
+  return input
+    .replace(/<[^>]*>/g, "")
+    .replace(/&[a-z]+;/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Ensures a string is safe for use as a filename component.
+ */
+export function sanitizeFilename(input: string): string {
+  return input
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+    .replace(/\.{2,}/g, ".")
+    .slice(0, 200)
+    .trim();
+}
+
+
+================================================================================
+FILE: src/remotion/animations.ts
+================================================================================
+
+import type {AnimationName} from "@/lib/editor-schema";
+
+type AnimationStyle = {
+  opacity: number;
+  transform: string;
+  textShadow?: string;
+  filter?: string;
+};
+
+/**
+ * Returns CSS properties for a given animation at a specific progress (0 → 1).
+ */
+export function getAnimationStyle(
+  animation: AnimationName,
+  progress: number
+): AnimationStyle {
+  const clamped = Math.max(0, Math.min(1, progress));
+
+  switch (animation) {
+    case "fade":
+      return {
+        opacity: clamped,
+        transform: `translateY(${(1 - clamped) * 12}px)`
+      };
+
+    case "slide_up":
+      return {
+        opacity: Math.min(1, clamped * 2),
+        transform: `translateY(${(1 - clamped) * 60}px)`
+      };
+
+    case "pop": {
+      const scale = clamped < 0.5
+        ? 0.3 + clamped * 2.4
+        : 1.5 - (clamped - 0.5) * 1.0;
+      return {
+        opacity: Math.min(1, clamped * 3),
+        transform: `scale(${Math.max(0.3, Math.min(1.5, scale))})`
+      };
+    }
+
+    case "neon_pulse": {
+      const glowIntensity = 10 + Math.sin(clamped * Math.PI * 4) * 8;
+      return {
+        opacity: clamped,
+        transform: `scale(${1 + Math.sin(clamped * Math.PI * 2) * 0.03})`,
+        textShadow: [
+          `0 0 ${glowIntensity}px rgba(139, 92, 246, 0.8)`,
+          `0 0 ${glowIntensity * 2}px rgba(139, 92, 246, 0.4)`,
+          `0 0 ${glowIntensity * 3}px rgba(217, 70, 239, 0.2)`
+        ].join(", ")
+      };
+    }
+
+    case "zoom_blur": {
+      const scale = 0.85 + clamped * 0.15;
+      const blur = Math.max(0, (1 - clamped) * 6);
+      return {
+        opacity: clamped,
+        transform: `scale(${scale})`,
+        filter: `blur(${blur}px)`
+      };
+    }
+
+    case "rain":
+      return {
+        opacity: clamped,
+        transform: `translateY(${(1 - clamped) * -40}px)`
+      };
+
+    case "shake": {
+      const shakeX = clamped < 0.8
+        ? Math.sin(clamped * Math.PI * 8) * 4 * (1 - clamped)
+        : 0;
+      return {
+        opacity: Math.min(1, clamped * 2.5),
+        transform: `translateX(${shakeX}px)`
+      };
+    }
+
+    default:
+      return {
+        opacity: clamped,
+        transform: "none"
+      };
+  }
+}
+
+
+================================================================================
+FILE: src/remotion/Composition.tsx
+================================================================================
+
+import React from "react";
+import {
+  AbsoluteFill,
+  Audio,
+  Img,
+  useCurrentFrame,
+  useVideoConfig
+} from "remotion";
+import type {EditorProject} from "@/lib/editor-schema";
+import {getAnimationStyle} from "./animations";
+
+type CompositionProps = {
+  project: EditorProject;
+};
+
+export const LyricalVideoComposition: React.FC<CompositionProps> = ({
+  project
+}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const currentTime = frame / fps;
+
+  // Find active segment
+  const activeSegment = project.segments.find(
+    (s) => currentTime >= s.start && currentTime <= s.end
+  );
+
+  // Calculate animation progress for active segment
+  const segmentProgress = activeSegment
+    ? Math.min(
+        1,
+        (currentTime - activeSegment.start) /
+          Math.max(0.1, (activeSegment.end - activeSegment.start) * 0.3)
+      )
+    : 0;
+
+  const animStyle = activeSegment
+    ? getAnimationStyle(activeSegment.animation, segmentProgress)
+    : {opacity: 0, transform: "none"};
+
+  // Find active word index for karaoke
+  const activeWordIndex = activeSegment
+    ? activeSegment.words.findIndex(
+        (w) => currentTime >= w.start && currentTime <= w.end
+      )
+    : -1;
+
+  // Determine which words have been spoken (for progressive highlight)
+  const spokenWordIndex = activeSegment
+    ? activeSegment.words.findIndex((w) => currentTime < w.start) - 1
+    : -1;
+
+  const highlightUpTo = Math.max(
+    activeWordIndex,
+    spokenWordIndex >= 0 ? spokenWordIndex : -1
+  );
+
+  return (
+    <AbsoluteFill>
+      {/* Background */}
+      <AbsoluteFill
+        style={{backgroundColor: project.backgroundColor}}
+      >
+        {project.backgroundUrl && (
+          <Img
+            src={project.backgroundUrl}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover"
+            }}
+          />
+        )}
+
+        {/* Gradient overlay */}
+        <AbsoluteFill
+          style={{
+            background:
+              "linear-gradient(to top, rgba(0,0,0,0.6), transparent, rgba(0,0,0,0.3))"
+          }}
+        />
+      </AbsoluteFill>
+
+      {/* Audio */}
+      <Audio src={project.audioUrl} />
+
+      {/* Lyrics */}
+      <AbsoluteFill
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "5%"
+        }}
+      >
+        {activeSegment && (
+          <div
+            style={{
+              textAlign: project.textStyle.align,
+              opacity: animStyle.opacity,
+              transform: animStyle.transform,
+              filter: animStyle.filter,
+              maxWidth: "85%"
+            }}
+          >
+            <p
+              style={{
+                fontFamily: project.textStyle.fontFamily,
+                fontSize: project.textStyle.fontSize,
+                fontWeight: 800,
+                lineHeight: 1.2,
+                color: project.textStyle.color,
+                textShadow:
+                  animStyle.textShadow ?? project.textStyle.shadow,
+                WebkitTextStroke: `${project.textStyle.outlineWidth}px ${project.textStyle.outlineColor}`,
+                margin: 0
+              }}
+            >
+              {project.toggles.karaokeHighlight
+                ? activeSegment.words.map((word, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        color:
+                          i <= highlightUpTo
+                            ? project.textStyle.highlightColor
+                            : project.textStyle.color,
+                        transition: "color 0.08s ease"
+                      }}
+                    >
+                      {word.word}{" "}
+                    </span>
+                  ))
+                : activeSegment.line}
+            </p>
+          </div>
+        )}
+      </AbsoluteFill>
+
+      {/* Beat sync flash overlay */}
+      {project.toggles.beatSync && (() => {
+        const nearestBeat = project.beats.reduce(
+          (closest, beat) =>
+            Math.abs(beat - currentTime) < Math.abs(closest - currentTime)
+              ? beat
+              : closest,
+          Infinity
+        );
+
+        const beatDistance = Math.abs(currentTime - nearestBeat);
+        const flashOpacity =
+          beatDistance < 0.08
+            ? (1 - beatDistance / 0.08) * 0.12
+            : 0;
+
+        return flashOpacity > 0 ? (
+          <AbsoluteFill
+            style={{
+              backgroundColor: `rgba(139, 92, 246, ${flashOpacity})`,
+              pointerEvents: "none"
+            }}
+          />
+        ) : null;
+      })()}
+    </AbsoluteFill>
+  );
+};
+
+
+================================================================================
+FILE: src/remotion/index.ts
+================================================================================
+
+import {registerRoot} from "remotion";
+import {RemotionRoot} from "./Root";
+
+registerRoot(RemotionRoot);
+
+
+================================================================================
+FILE: src/remotion/Root.tsx
+================================================================================
+
+import React from "react";
+import {Composition} from "remotion";
+import {LyricalVideoComposition} from "./Composition";
+import type {EditorProject} from "@/lib/editor-schema";
+
+const defaultProject: EditorProject = {
+  version: 1,
+  title: "Preview",
+  fps: 30,
+  width: 1920,
+  height: 1080,
+  duration: 10,
+  audioUrl: "",
+  backgroundColor: "#111827",
+  segments: [],
+  beats: [],
+  textStyle: {
+    fontFamily: "Inter",
+    fontSize: 84,
+    color: "#ffffff",
+    highlightColor: "#fde047",
+    outlineColor: "#111827",
+    outlineWidth: 2,
+    shadow: "0 8px 26px rgba(0,0,0,.5)",
+    align: "center"
+  },
+  toggles: {
+    beatSync: false,
+    contextualAnimations: false,
+    karaokeHighlight: true
+  }
+};
+
+export const RemotionRoot: React.FC = () => {
+  return (
+    <>
+      <Composition
+        id="LyricalVideo"
+        component={LyricalVideoComposition}
+        durationInFrames={300}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{project: defaultProject}}
+        calculateMetadata={async ({props}) => {
+          const project = props.project;
+          return {
+            durationInFrames: Math.ceil(project.duration * project.fps),
+            fps: project.fps,
+            width: project.width,
+            height: project.height
+          };
+        }}
+      />
+    </>
+  );
+};
+
+
+================================================================================
+FILE: src/services/api-keys.ts
+================================================================================
+
+import {secureStorage} from "./encrypted-web-storage";
+
+export type ApiCredentials = {
+  groq: string;
+  nvidia: string;
+  nvidiaModel: string;
+};
+
+const CREDENTIAL_KEY = "api-credentials";
+
+export const apiKeyStorage = {
+  get: () => secureStorage.get<ApiCredentials>(CREDENTIAL_KEY),
+  set: (credentials: ApiCredentials) =>
+    secureStorage.set(CREDENTIAL_KEY, credentials),
+  clear: () => secureStorage.remove(CREDENTIAL_KEY)
+};
+
+
+================================================================================
+FILE: src/services/asset-client.ts
+================================================================================
+
+export async function uploadAsset(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+
+  const response = await fetch("/api/assets", {
+    method: "POST",
+    body: form
+  });
+
+  const body = await response.json();
+
+  if (!response.ok) {
+    throw new Error(body.message ?? "Asset upload failed.");
+  }
+
+  return body.url;
+}
+
+
+================================================================================
+FILE: src/services/encrypted-web-storage.ts
+================================================================================
+
+import type {SecureStorage} from "./storage";
+
+const DB_NAME = "lyrical-studio-secure";
+const STORE_NAME = "crypto";
+const MASTER_KEY_ID = "master-key";
+const PREFIX = "lyrical.encrypted.";
+
+type CipherRecord = {
+  iv: string;
+  payload: string;
+};
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let value = "";
+  for (const byte of bytes) value += String.fromCharCode(byte);
+  return btoa(value);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function openDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(STORE_NAME);
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getMasterKey(): Promise<CryptoKey> {
+  const database = await openDatabase();
+
+  const existing = await new Promise<CryptoKey | undefined>(
+    (resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, "readonly");
+      const request = transaction.objectStore(STORE_NAME).get(MASTER_KEY_ID);
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    }
+  );
+
+  if (existing) return existing;
+
+  const key = await crypto.subtle.generateKey(
+    {name: "AES-GCM", length: 256},
+    false,
+    ["encrypt", "decrypt"]
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    transaction.objectStore(STORE_NAME).put(key, MASTER_KEY_ID);
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+
+  return key;
+}
+
+export class EncryptedWebStorage implements SecureStorage {
+  async set<T>(key: string, value: T): Promise<void> {
+    const masterKey = await getMasterKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(JSON.stringify(value));
+
+    const encrypted = await crypto.subtle.encrypt(
+      {name: "AES-GCM", iv},
+      masterKey,
+      plaintext
+    );
+
+    const record: CipherRecord = {
+      iv: bytesToBase64(iv),
+      payload: bytesToBase64(new Uint8Array(encrypted))
+    };
+
+    localStorage.setItem(PREFIX + key, JSON.stringify(record));
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    const raw = localStorage.getItem(PREFIX + key);
+    if (!raw) return null;
+
+    try {
+      const record = JSON.parse(raw) as CipherRecord;
+      const masterKey = await getMasterKey();
+
+      const decrypted = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: base64ToBytes(record.iv)
+        },
+        masterKey,
+        base64ToBytes(record.payload)
+      );
+
+      return JSON.parse(new TextDecoder().decode(decrypted)) as T;
+    } catch {
+      localStorage.removeItem(PREFIX + key);
+      return null;
+    }
+  }
+
+  async remove(key: string): Promise<void> {
+    localStorage.removeItem(PREFIX + key);
+  }
+}
+
+export const secureStorage = new EncryptedWebStorage();
+
+
+================================================================================
+FILE: src/services/groq.ts
+================================================================================
+
+import {z} from "zod";
+
+const groqWordSchema = z.object({
+  word: z.string(),
+  start: z.number(),
+  end: z.number()
+});
+
+const groqResponseSchema = z.object({
+  text: z.string().optional(),
+  duration: z.number().optional(),
+  words: z.array(groqWordSchema)
+});
+
+export type GroqWord = z.infer<typeof groqWordSchema>;
+
+export async function transcribeWithGroq(options: {
+  apiKey: string;
+  file: File;
+  prompt?: string;
+}) {
+  const formData = new FormData();
+
+  formData.append("file", options.file, options.file.name);
+  formData.append("model", "whisper-large-v3");
+  formData.append("response_format", "verbose_json");
+  formData.append("timestamp_granularities[]", "word");
+  formData.append("timestamp_granularities[]", "segment");
+  formData.append("temperature", "0");
+
+  if (options.prompt) {
+    formData.append("prompt", options.prompt.slice(0, 800));
+  }
+
+  const response = await fetch(
+    "https://api.groq.com/openai/v1/audio/transcriptions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`
+      },
+      body: formData,
+      cache: "no-store",
+      signal: AbortSignal.timeout(180_000)
+    }
+  );
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(
+      `Groq transcription failed (${response.status}): ${message.slice(0, 300)}`
+    );
+  }
+
+  return groqResponseSchema.parse(await response.json());
+}
+
+
+================================================================================
+FILE: src/services/nvidia.ts
+================================================================================
+
+import {animationSchema} from "@/lib/editor-schema";
+import {z} from "zod";
+
+const responseSchema = z.object({
+  choices: z.array(
+    z.object({
+      message: z.object({
+        content: z.string().nullable()
+      })
+    })
+  )
+});
+
+const animationResponseSchema = z.object({
+  animations: z.array(
+    z.object({
+      id: z.string(),
+      animation: animationSchema
+    })
+  )
+});
+
+export async function generateContextualAnimations(options: {
+  apiKey: string;
+  model: string;
+  lines: Array<{id: string; line: string}>;
+}) {
+  const response = await fetch(
+    "https://integrate.api.nvidia.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: options.model,
+        temperature: 0.2,
+        max_tokens: 1800,
+        messages: [
+          {
+            role: "system",
+            content: [
+              "You assign safe visual animations to lyric lines.",
+              "Return JSON only.",
+              "Allowed animations: fade, slide_up, pop, neon_pulse,",
+              "zoom_blur, rain, shake.",
+              'Format: {"animations":[{"id":"line id","animation":"fade"}]}',
+              "Return exactly one entry for every supplied ID."
+            ].join(" ")
+          },
+          {
+            role: "user",
+            content: JSON.stringify(options.lines)
+          }
+        ]
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(60_000)
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `NVIDIA NIM failed (${response.status}): ${(await response.text()).slice(
+        0,
+        300
+      )}`
+    );
+  }
+
+  const body = responseSchema.parse(await response.json());
+  const raw = body.choices[0]?.message.content;
+
+  if (!raw) throw new Error("NVIDIA returned an empty response.");
+
+  const jsonText = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  return animationResponseSchema.parse(JSON.parse(jsonText)).animations;
+}
+
+
+================================================================================
+FILE: src/services/render.ts
+================================================================================
+
+import path from "node:path";
+
+/**
+ * Server-side rendering service.
+ * The Remotion bundle must be pre-built during `npm run build:remotion`.
+ * This module provides helpers for the export API route.
+ */
+
+export function getRemotionBundlePath(): string {
+  return path.resolve(
+    process.env.REMOTION_BUNDLE_DIRECTORY ?? "./remotion-bundle"
+  );
+}
+
+export function getRenderOutputDirectory(): string {
+  return path.resolve(process.env.RENDER_DIRECTORY ?? "./data/renders");
+}
+
+export function getRenderConcurrency(): string {
+  return process.env.RENDER_CONCURRENCY ?? "75%";
+}
+
+export type RenderRequest = {
+  projectJson: string;
+  outputFilename: string;
+};
+
+export type RenderResult = {
+  filePath: string;
+  url: string;
+  durationMs: number;
+};
+
+
+================================================================================
+FILE: src/services/sound-manager.ts
+================================================================================
+
+class SoundManager {
+  private context: AudioContext | null = null;
+
+  async beep(frequency = 660): Promise<void> {
+    if (typeof window === "undefined") return;
+
+    this.context ??= new AudioContext();
+
+    if (this.context.state === "suspended") {
+      await this.context.resume();
+    }
+
+    const now = this.context.currentTime;
+    const oscillator = this.context.createOscillator();
+    const gain = this.context.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(frequency, now);
+    oscillator.frequency.exponentialRampToValueAtTime(
+      frequency * 1.08,
+      now + 0.08
+    );
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+
+    oscillator.connect(gain);
+    gain.connect(this.context.destination);
+
+    oscillator.start(now);
+    oscillator.stop(now + 0.14);
+  }
+}
+
+export const soundManager = new SoundManager();
+
+
+================================================================================
+FILE: src/services/storage.ts
+================================================================================
+
+export interface SecureStorage {
+  get<T>(key: string): Promise<T | null>;
+  set<T>(key: string, value: T): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+export interface DesktopStorageAdapter extends SecureStorage {
+  /**
+   * A future Tauri implementation should call Rust commands backed by:
+   * - the macOS Keychain,
+   * - Windows Credential Manager,
+   * - Linux Secret Service,
+   * or an encrypted local database.
+   */
+}
+
+
+================================================================================
+FILE: src/stores/editor-store.ts
+================================================================================
+
+"use client";
+
+import {create} from "zustand";
+import type {
+  AnimationName,
+  EditorProject,
+  LyricSegment
+} from "@/lib/editor-schema";
+import {defaultTextStyle} from "@/lib/editor-schema";
+
+type EditorState = {
+  project: EditorProject | null;
+  playhead: number;
+  selectedSegmentId: string | null;
+  isExporting: boolean;
+  exportProgress: number;
+
+  loadProject: (project: EditorProject) => void;
+  setPlayhead: (seconds: number) => void;
+  selectSegment: (id: string | null) => void;
+  moveSegment: (id: string, start: number, end: number) => void;
+  setAnimation: (id: string, animation: AnimationName) => void;
+  setSegments: (segments: LyricSegment[]) => void;
+  setBackground: (url?: string) => void;
+  patchTextStyle: (
+    patch: Partial<EditorProject["textStyle"]>
+  ) => void;
+  setToggle: (
+    key: keyof EditorProject["toggles"],
+    value: boolean
+  ) => void;
+  setResolution: (quality: "720p" | "1080p") => void;
+  setExportState: (isExporting: boolean, progress?: number) => void;
+};
+
+export const useEditorStore = create<EditorState>((set) => ({
+  project: null,
+  playhead: 0,
+  selectedSegmentId: null,
+  isExporting: false,
+  exportProgress: 0,
+
+  loadProject: (project) =>
+    set({
+      project,
+      playhead: 0,
+      selectedSegmentId: project.segments[0]?.id ?? null
+    }),
+
+  setPlayhead: (playhead) => set({playhead}),
+
+  selectSegment: (selectedSegmentId) => set({selectedSegmentId}),
+
+  moveSegment: (id, start, end) =>
+    set((state) => {
+      if (!state.project) return state;
+
+      const old = state.project.segments.find((segment) => segment.id === id);
+      if (!old) return state;
+
+      const safeStart = Math.max(0, start);
+      const safeEnd = Math.max(safeStart + 0.1, end);
+      const offset = safeStart - old.start;
+
+      return {
+        project: {
+          ...state.project,
+          segments: state.project.segments.map((segment) =>
+            segment.id === id
+              ? {
+                  ...segment,
+                  start: safeStart,
+                  end: safeEnd,
+                  words: segment.words.map((word) => ({
+                    ...word,
+                    start: Math.max(0, word.start + offset),
+                    end: Math.max(0.01, word.end + offset)
+                  }))
+                }
+              : segment
+          )
+        }
+      };
+    }),
+
+  setAnimation: (id, animation) =>
+    set((state) => {
+      if (!state.project) return state;
+
+      return {
+        project: {
+          ...state.project,
+          segments: state.project.segments.map((segment) =>
+            segment.id === id ? {...segment, animation} : segment
+          )
+        }
+      };
+    }),
+
+  setSegments: (segments) =>
+    set((state) =>
+      state.project
+        ? {project: {...state.project, segments}}
+        : state
+    ),
+
+  setBackground: (backgroundUrl) =>
+    set((state) =>
+      state.project
+        ? {project: {...state.project, backgroundUrl}}
+        : state
+    ),
+
+  patchTextStyle: (patch) =>
+    set((state) =>
+      state.project
+        ? {
+            project: {
+              ...state.project,
+              textStyle: {...state.project.textStyle, ...patch}
+            }
+          }
+        : state
+    ),
+
+  setToggle: (key, value) =>
+    set((state) =>
+      state.project
+        ? {
+            project: {
+              ...state.project,
+              toggles: {...state.project.toggles, [key]: value}
+            }
+          }
+        : state
+    ),
+
+  setResolution: (quality) =>
+    set((state) =>
+      state.project
+        ? {
+            project: {
+              ...state.project,
+              width: quality === "1080p" ? 1920 : 1280,
+              height: quality === "1080p" ? 1080 : 720
+            }
+          }
+        : state
+    ),
+
+  setExportState: (isExporting, exportProgress = 0) =>
+    set({isExporting, exportProgress})
+}));
+
+export function createProject(input: {
+  audioUrl: string;
+  duration: number;
+  segments: LyricSegment[];
+  beats?: number[];
+}): EditorProject {
+  return {
+    version: 1,
+    title: "Untitled lyrical video",
+    fps: 30,
+    width: 1920,
+    height: 1080,
+    duration: input.duration,
+    audioUrl: input.audioUrl,
+    backgroundColor: "#111827",
+    segments: input.segments,
+    beats: input.beats ?? [],
+    textStyle: {...defaultTextStyle},
+    toggles: {
+      beatSync: false,
+      contextualAnimations: false,
+      karaokeHighlight: true
+    }
+  };
+}
+
+
+================================================================================
+FILE: tsconfig.json
+================================================================================
+
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "remotion-bundle"
+  ]
+}
+
+
