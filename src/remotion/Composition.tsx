@@ -6,9 +6,9 @@ import {
   useCurrentFrame,
   useVideoConfig
 } from "remotion";
-import type {EditorProject} from "@/lib/editor-schema";
+import type {EditorProject} from "../lib/editor-schema";
 import {getAnimationStyle} from "./animations";
-import {getActiveSegment, getHighlightedWordIndex} from "@/lib/caption-timing";
+import {getActiveSegment, getHighlightedWordIndex} from "../lib/caption-timing";
 
 type CompositionProps = {
   project: EditorProject;

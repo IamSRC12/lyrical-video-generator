@@ -1,7 +1,7 @@
 import React from "react";
 import {Composition} from "remotion";
 import {LyricalVideoComposition} from "./Composition";
-import type {EditorProject} from "@/lib/editor-schema";
+import type {EditorProject} from "../lib/editor-schema";
 
 const defaultProject: EditorProject = {
   version: 1,

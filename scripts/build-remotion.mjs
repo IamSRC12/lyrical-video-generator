@@ -22,7 +22,16 @@ try {
   const bundlePath = await bundle({
     entryPoint,
     outDir,
-    webpackOverride: (config) => config
+    webpackOverride: (config) => ({
+      ...config,
+      resolve: {
+        ...(config.resolve || {}),
+        alias: {
+          ...(config.resolve?.alias || {}),
+          "@": path.resolve(__dirname, "../src")
+        }
+      }
+    })
   });
 
   console.log(`Remotion bundle created at: ${bundlePath}`);
