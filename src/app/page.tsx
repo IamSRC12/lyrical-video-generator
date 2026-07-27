@@ -20,31 +20,9 @@ export default async function HomePage() {
         </p>
 
         <div className="mt-8 flex justify-center gap-3">
-          {session?.user ? (
-            <>
-              <Link className="button-primary" href="/onboarding">
-                Open studio
-              </Link>
-
-              <form
-                action={async () => {
-                  "use server";
-                  await signOut();
-                }}
-              >
-                <button className="button-secondary">Sign out</button>
-              </form>
-            </>
-          ) : (
-            <form
-              action={async () => {
-                "use server";
-                await signIn("github", {redirectTo: "/onboarding"});
-              }}
-            >
-              <button className="button-primary">Continue with GitHub</button>
-            </form>
-          )}
+          <Link className="button-primary" href="/onboarding">
+            Open studio
+          </Link>
         </div>
       </section>
     </main>
