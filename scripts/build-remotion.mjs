@@ -1,10 +1,5 @@
-/**
- * Pre-builds the Remotion bundle during `npm run build:remotion`.
- * This bundle is reused by the rendering route at runtime.
- * @remotion/bundler should NOT run inside a Next.js route.
- */
-
 import {bundle} from "@remotion/bundler";
+import {rm} from "node:fs/promises";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -22,6 +17,8 @@ console.log(`  Entry: ${entryPoint}`);
 console.log(`  Output: ${outDir}`);
 
 try {
+  await rm(outDir, {recursive: true, force: true});
+
   const bundlePath = await bundle({
     entryPoint,
     outDir,
@@ -31,7 +28,5 @@ try {
   console.log(`Remotion bundle created at: ${bundlePath}`);
 } catch (error) {
   console.error("Failed to build Remotion bundle:", error);
-  // Don't fail the overall build if Remotion bundle fails
-  // (e.g., during CI without GPU/Chrome)
-  console.warn("Continuing without Remotion bundle...");
+  process.exitCode = 1;
 }

@@ -27,7 +27,6 @@ export async function POST(request: Request) {
     const outputFilename = `${crypto.randomUUID()}.mp4`;
     const outputPath = path.join(outputDir, outputFilename);
 
-    // Dynamic import to avoid bundling Remotion renderer with the Next.js client
     const {renderMedia, selectComposition} = await import(
       "@remotion/renderer"
     );
@@ -44,11 +43,20 @@ export async function POST(request: Request) {
       composition,
       serveUrl: bundlePath,
       codec: "h264",
+      audioCodec: "aac",
       outputLocation: outputPath,
       inputProps: {project},
-      concurrency: concurrency === "75%" ? "75%" : Number(concurrency),
+      concurrency,
+      crf: 18,
+      pixelFormat: "yuv420p",
+      x264Preset: "medium",
+      overwrite: true,
+      browserExecutable: process.env.CHROMIUM_PATH || undefined,
       chromiumOptions: {
         enableMultiProcessOnLinux: true
+      },
+      onProgress: ({progress}) => {
+        console.log(`Render progress: ${Math.round(progress * 100)}%`);
       }
     });
 
@@ -57,7 +65,7 @@ export async function POST(request: Request) {
       process.env.APP_BASE_URL ?? "http://localhost:3000";
 
     return Response.json({
-      url: `${baseUrl}/api/assets/${encodeURIComponent(outputFilename)}`,
+      url: `${baseUrl}/api/renders/${encodeURIComponent(outputFilename)}`,
       durationMs,
       outputFilename
     });

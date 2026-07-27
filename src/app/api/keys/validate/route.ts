@@ -4,7 +4,7 @@ import {z} from "zod";
 export const runtime = "nodejs";
 
 const requestSchema = z.object({
-  provider: z.enum(["groq", "nvidia"]),
+  provider: z.enum(["groq", "opencode"]),
   key: z.string().min(10)
 });
 
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const url =
       provider === "groq"
         ? "https://api.groq.com/openai/v1/models"
-        : "https://integrate.api.nvidia.com/v1/models";
+        : "https://opencode.ai/zen/v1/models";
 
     const response = await fetch(url, {
       headers: {
