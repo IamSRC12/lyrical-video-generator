@@ -5,7 +5,6 @@ import {
   Film,
   LoaderCircle,
   Monitor,
-  Settings2,
   Sparkles
 } from "lucide-react";
 import {toast} from "sonner";
@@ -31,22 +30,25 @@ export function TopBar() {
 
     const credentials = await apiKeyStorage.get();
     if (!credentials) {
-      toast.error("API keys not found.");
+      toast.error("API keys not found. Please setup API keys on onboarding page.");
       return;
     }
 
-    toast.info("Generating contextual animations...");
+    toast.info("Generating contextual animations with OpenCode Zen...");
 
     try {
-      const response = await fetch("/api/nvidia/animations", {
+      const response = await fetch("/api/opencode/animations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-nvidia-key": credentials.nvidia
+          "x-opencode-key": credentials.opencode
         },
         body: JSON.stringify({
-          model: credentials.nvidiaModel,
-          lines: project.segments.map((s) => ({id: s.id, line: s.line}))
+          model: credentials.opencodeModel,
+          lines: project.segments.map((segment) => ({
+            id: segment.id,
+            line: segment.line
+          }))
         })
       });
 
@@ -96,8 +98,13 @@ export function TopBar() {
         `Rendered in ${(result.durationMs / 1000).toFixed(1)}s`
       );
 
-      // Open download
-      window.open(result.url, "_blank");
+      // Programmatic anchor download to prevent popup blocker issues
+      const anchor = document.createElement("a");
+      anchor.href = result.url;
+      anchor.download = result.outputFilename ?? "lyrical-video.mp4";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
     } catch (error) {
       setExportState(false, 0);
       toast.error(

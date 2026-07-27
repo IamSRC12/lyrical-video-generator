@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+ENV CHROMIUM_PATH=/usr/bin/chromium
+ENV RENDER_CONCURRENCY=50%
+
 # Install dependencies
 COPY package.json package-lock.json* ./
 RUN npm ci --production=false
