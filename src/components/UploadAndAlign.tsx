@@ -2,6 +2,7 @@
 
 import { defaultTextStyle, type AnimationName, type EditorProject, type LyricSegment } from "@/lib/editor-schema";
 import { getStoredGroqKey, getStoredOpencodeKey } from "@/services/api-keys";
+import { uploadAsset } from "@/services/asset-client";
 import { useEditorStore } from "@/stores/editor-store";
 import { Activity, Key, Music, Sparkles, Upload, Wand2 } from "lucide-react";
 import { useRef, useState } from "react";
@@ -64,21 +65,7 @@ export function UploadAndAlign() {
       setStage("uploading");
       setStageProgress(15);
 
-      const assetFormData = new FormData();
-      assetFormData.append("file", audioFile);
-
-      const uploadRes = await fetch("/api/assets", {
-        method: "POST",
-        body: assetFormData,
-        signal
-      });
-
-      if (!uploadRes.ok) {
-        const errJson = await uploadRes.json().catch(() => ({}));
-        throw new Error(errJson.error || `Upload failed (HTTP ${uploadRes.status})`);
-      }
-
-      const assetData = await uploadRes.json();
+      const assetData = await uploadAsset(audioFile, { signal });
       const audioAssetId = assetData.id;
       const audioUrl = assetData.url;
 
