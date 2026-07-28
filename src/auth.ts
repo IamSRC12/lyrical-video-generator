@@ -1,16 +1,23 @@
-export async function auth() {
-  return {
-    user: {
-      name: "Local Studio User",
-      email: "user@local.studio"
+import NextAuth from "next-auth";
+import GitHub from "next-auth/providers/github";
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  providers: [
+    GitHub({
+      clientId: process.env.AUTH_GITHUB_ID || "dummy-client-id",
+      clientSecret: process.env.AUTH_GITHUB_SECRET || "dummy-client-secret"
+    })
+  ],
+  session: {
+    strategy: "jwt"
+  },
+  pages: {
+    signIn: "/auth/signin"
+  },
+  callbacks: {
+    authorized({ auth }) {
+      // In production or demo mode, allow session access
+      return !!auth || process.env.NODE_ENV !== "production";
     }
-  };
-}
-
-export const handlers = {
-  GET: async () => new Response("Auth disabled", {status: 200}),
-  POST: async () => new Response("Auth disabled", {status: 200})
-};
-
-export async function signIn() {}
-export async function signOut() {}
+  }
+});

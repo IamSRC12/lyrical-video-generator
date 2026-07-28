@@ -1,6 +1,19 @@
-export async function requireUser() {
+import { auth } from "@/auth";
+import { NextResponse } from "next/server";
+
+export async function requireAuth() {
+  const session = await auth();
+
+  // If Auth is configured and running, require user session in production
+  if (!session && process.env.NODE_ENV === "production" && process.env.AUTH_GITHUB_ID) {
+    return {
+      session: null,
+      response: NextResponse.json({ error: "Unauthorized access" }, { status: 401 })
+    };
+  }
+
   return {
-    name: "Local Studio User",
-    email: "user@local.studio"
+    session: session ?? { user: { id: "dev-user", name: "Developer" } },
+    response: null
   };
 }

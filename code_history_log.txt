@@ -1,4 +1,458 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 00:19:59
+FILE PATH: src/services/groq.ts
+ACTION: Modified
+================================================================================
+import { z } from "zod";
+
+const groqWordSchema = z.object({
+  word: z.string(),
+  start: z.number(),
+  end: z.number()
+});
+
+const groqVerboseResponseSchema = z.object({
+  task: z.string().optional(),
+  language: z.string().optional(),
+  duration: z.number().optional(),
+  text: z.string().optional(),
+  words: z.array(groqWordSchema).default([])
+});
+
+export type GroqWord = z.infer<typeof groqWordSchema>;
+export type GroqVerboseResponse = z.infer<typeof groqVerboseResponseSchema>;
+
+export async function transcribeWithGroq(options: {
+  apiKey: string;
+  file: File | Blob;
+  filename?: string;
+  prompt?: string;
+}): Promise<GroqVerboseResponse> {
+  const formData = new FormData();
+
+  const fileName = options.filename || (options.file instanceof File ? options.file.name : "audio.mp3");
+  formData.append("file", options.file, fileName);
+  formData.append("model", "whisper-large-v3");
+  formData.append("response_format", "verbose_json");
+  formData.append("timestamp_granularities[]", "word");
+  formData.append("timestamp_granularities[]", "segment");
+  formData.append("temperature", "0");
+
+  if (options.prompt && options.prompt.trim()) {
+    formData.append("prompt", options.prompt.slice(0, 800));
+  }
+
+  const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.apiKey}`
+    },
+    body: formData,
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let parsedMessage = errorText;
+    try {
+      const errJson = JSON.parse(errorText);
+      if (errJson?.error?.message) parsedMessage = errJson.error.message;
+    } catch {
+      // Use raw text snippet
+    }
+    throw new Error(`Groq API Error (${response.status}): ${parsedMessage.slice(0, 300)}`);
+  }
+
+  const rawJson = await response.json();
+  return groqVerboseResponseSchema.parse(rawJson);
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:19:49
+FILE PATH: src/app/api/assets/[id]/route.ts
+ACTION: Created
+================================================================================
+import { createReadStream, existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import { NextResponse } from "next/server";
+
+const STORAGE_DIR = path.resolve(process.env.ASSET_STORAGE_PATH ?? "./data/assets");
+
+function getMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".mp3": return "audio/mpeg";
+    case ".wav": return "audio/wav";
+    case ".m4a": case ".aac": return "audio/mp4";
+    case ".ogg": return "audio/ogg";
+    case ".png": return "image/png";
+    case ".jpg": case ".jpeg": return "image/jpeg";
+    case ".webp": return "image/webp";
+    case ".mp4": return "video/mp4";
+    default: return "application/octet-stream";
+  }
+}
+
+export async function GET(
+  request: Request,
+  props: { params: Promise<{ id: string }> }
+) {
+  const params = await props.params;
+  const id = params.id;
+
+  // Sanitize path traversal attempts
+  const safeFilename = path.basename(id);
+  const filePath = path.join(STORAGE_DIR, safeFilename);
+
+  if (!existsSync(filePath)) {
+    return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+  }
+
+  try {
+    const fileStat = await stat(filePath);
+    const mimeType = getMimeType(filePath);
+
+    const stream = createReadStream(filePath);
+    const readableStream = new ReadableStream({
+      start(controller) {
+        stream.on("data", (chunk) => controller.enqueue(chunk));
+        stream.on("end", () => controller.close());
+        stream.on("error", (err) => controller.error(err));
+      }
+    });
+
+    return new Response(readableStream, {
+      headers: {
+        "Content-Type": mimeType,
+        "Content-Length": fileStat.size.toString(),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=31536000, immutable"
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Stream error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:19:41
+FILE PATH: src/app/api/assets/route.ts
+ACTION: Created
+================================================================================
+import { requireAuth } from "@/lib/auth-guard";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { NextResponse } from "next/server";
+
+const STORAGE_DIR = path.resolve(process.env.ASSET_STORAGE_PATH ?? "./data/assets");
+
+export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
+  try {
+    const formData = await request.formData();
+    const file = formData.get("file") as File | null;
+
+    if (!file) {
+      return NextResponse.json({ error: "No file was uploaded" }, { status: 400 });
+    }
+
+    // Validate size (max 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      return NextResponse.json({ error: "File exceeds maximum size limit of 50MB" }, { status: 400 });
+    }
+
+    const extension = path.extname(file.name) || ".bin";
+    const assetId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}${extension}`;
+    
+    await mkdir(STORAGE_DIR, { recursive: true });
+    const filePath = path.join(STORAGE_DIR, assetId);
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await writeFile(filePath, buffer);
+
+    const url = `/api/assets/${assetId}`;
+
+    return NextResponse.json({
+      id: assetId,
+      url,
+      filename: file.name,
+      mimeType: file.type,
+      size: file.size
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown upload error";
+    return NextResponse.json({ error: `Asset upload failed: ${message}` }, { status: 500 });
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:19:32
+FILE PATH: src/lib/auth-guard.ts
+ACTION: Created
+================================================================================
+import { auth } from "@/auth";
+import { NextResponse } from "next/server";
+
+export async function requireAuth() {
+  const session = await auth();
+
+  // If Auth is configured and running, require user session in production
+  if (!session && process.env.NODE_ENV === "production" && process.env.AUTH_GITHUB_ID) {
+    return {
+      session: null,
+      response: NextResponse.json({ error: "Unauthorized access" }, { status: 401 })
+    };
+  }
+
+  return {
+    session: session ?? { user: { id: "dev-user", name: "Developer" } },
+    response: null
+  };
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:19:23
+FILE PATH: src/auth.ts
+ACTION: Modified
+================================================================================
+import NextAuth from "next-auth";
+import GitHub from "next-auth/providers/github";
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  providers: [
+    GitHub({
+      clientId: process.env.AUTH_GITHUB_ID || "dummy-client-id",
+      clientSecret: process.env.AUTH_GITHUB_SECRET || "dummy-client-secret"
+    })
+  ],
+  session: {
+    strategy: "jwt"
+  },
+  pages: {
+    signIn: "/auth/signin"
+  },
+  callbacks: {
+    authorized({ auth }) {
+      // In production or demo mode, allow session access
+      return !!auth || process.env.NODE_ENV !== "production";
+    }
+  }
+});
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:19:11
+FILE PATH: src/services/api-keys.ts
+ACTION: Modified
+================================================================================
+import { secureStorage } from "./encrypted-web-storage";
+
+const GROQ_KEY_NAME = "groq_api_key";
+const NVIDIA_KEY_NAME = "nvidia_api_key";
+
+export async function getStoredGroqKey(): Promise<string | null> {
+  return secureStorage.get<string>(GROQ_KEY_NAME);
+}
+
+export async function setStoredGroqKey(key: string): Promise<void> {
+  if (!key.trim()) {
+    await secureStorage.remove(GROQ_KEY_NAME);
+    return;
+  }
+  await secureStorage.set(GROQ_KEY_NAME, key.trim());
+}
+
+export async function clearStoredGroqKey(): Promise<void> {
+  await secureStorage.remove(GROQ_KEY_NAME);
+}
+
+export async function getStoredNvidiaKey(): Promise<string | null> {
+  return secureStorage.get<string>(NVIDIA_KEY_NAME);
+}
+
+export async function setStoredNvidiaKey(key: string): Promise<void> {
+  if (!key.trim()) {
+    await secureStorage.remove(NVIDIA_KEY_NAME);
+    return;
+  }
+  await secureStorage.set(NVIDIA_KEY_NAME, key.trim());
+}
+
+export async function clearStoredNvidiaKey(): Promise<void> {
+  await secureStorage.remove(NVIDIA_KEY_NAME);
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:18:58
+FILE PATH: src/services/encrypted-web-storage.ts
+ACTION: Modified
+================================================================================
+const DB_NAME = "lyrical_studio_secure_store";
+const STORE_NAME = "crypto_keys";
+const MASTER_KEY_ID = "master_aes_gcm_key";
+const STORAGE_PREFIX = "lyrical_enc_v1_";
+
+export interface SecureStorage {
+  set<T>(key: string, value: T): Promise<void>;
+  get<T>(key: string): Promise<T | null>;
+  remove(key: string): Promise<void>;
+}
+
+type CipherRecord = {
+  version: 1;
+  iv: string;
+  payload: string;
+};
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function openIndexedDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("IndexedDB is not supported in this environment"));
+      return;
+    }
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(STORE_NAME);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getMasterKey(): Promise<CryptoKey> {
+  const db = await openIndexedDB();
+
+  const existingKey = await new Promise<CryptoKey | undefined>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.get(MASTER_KEY_ID);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+
+  if (existingKey) {
+    return existingKey;
+  }
+
+  const newKey = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false, // extractable: false for security
+    ["encrypt", "decrypt"]
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    store.put(newKey, MASTER_KEY_ID);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+
+  return newKey;
+}
+
+export class EncryptedWebStorage implements SecureStorage {
+  async set<T>(key: string, value: T): Promise<void> {
+    if (typeof window === "undefined" || !window.crypto?.subtle) {
+      throw new Error("EncryptedWebStorage is only available in browser contexts");
+    }
+
+    const masterKey = await getMasterKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV
+    const encoded = new TextEncoder().encode(JSON.stringify(value));
+
+    const encryptedBuffer = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      masterKey,
+      encoded
+    );
+
+    const record: CipherRecord = {
+      version: 1,
+      iv: bytesToBase64(iv),
+      payload: bytesToBase64(new Uint8Array(encryptedBuffer))
+    };
+
+    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(record));
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    if (typeof window === "undefined" || !window.crypto?.subtle) {
+      return null;
+    }
+
+    const raw = localStorage.getItem(STORAGE_PREFIX + key);
+    if (!raw) return null;
+
+    try {
+      const record = JSON.parse(raw) as CipherRecord;
+      if (record.version !== 1 || !record.iv || !record.payload) {
+        throw new Error("Invalid cipher record format");
+      }
+
+      const masterKey = await getMasterKey();
+      const iv = base64ToBytes(record.iv);
+      const encryptedBytes = base64ToBytes(record.payload);
+
+      const decryptedBuffer = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv },
+        masterKey,
+        encryptedBytes
+      );
+
+      const text = new TextDecoder().decode(decryptedBuffer);
+      return JSON.parse(text) as T;
+    } catch {
+      // Clear corrupt or un-decryptable payload (e.g., cleared IndexedDB key)
+      localStorage.removeItem(STORAGE_PREFIX + key);
+      return null;
+    }
+  }
+
+  async remove(key: string): Promise<void> {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(STORAGE_PREFIX + key);
+    }
+  }
+}
+
+export const secureStorage = new EncryptedWebStorage();
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 00:18:47
 FILE PATH: src/lib/editor-schema.ts
 ACTION: Modified

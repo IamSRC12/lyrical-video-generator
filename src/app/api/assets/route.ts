@@ -1,52 +1,47 @@
-import {requireUser} from "@/lib/auth-guard";
-import {mkdir, writeFile} from "node:fs/promises";
+import { requireAuth } from "@/lib/auth-guard";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
-
-function safeExtension(name: string) {
-  const extension = path.extname(name).toLowerCase();
-  return /^[.][a-z0-9]{1,8}$/.test(extension) ? extension : "";
-}
+const STORAGE_DIR = path.resolve(process.env.ASSET_STORAGE_PATH ?? "./data/assets");
 
 export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
   try {
-    await requireUser();
-
     const formData = await request.formData();
-    const file = formData.get("file");
+    const file = formData.get("file") as File | null;
 
-    if (!(file instanceof File)) {
-      return Response.json({message: "File is required."}, {status: 400});
+    if (!file) {
+      return NextResponse.json({ error: "No file was uploaded" }, { status: 400 });
     }
 
-    const maxBytes = Number(process.env.MAX_UPLOAD_BYTES ?? 100_000_000);
-
-    if (file.size > maxBytes) {
-      return Response.json({message: "File is too large."}, {status: 413});
+    // Validate size (max 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      return NextResponse.json({ error: "File exceeds maximum size limit of 50MB" }, { status: 400 });
     }
 
-    const id = `${crypto.randomUUID()}${safeExtension(file.name)}`;
-    const directory = path.resolve(
-      process.env.ASSET_DIRECTORY ?? "./data/assets"
-    );
+    const extension = path.extname(file.name) || ".bin";
+    const assetId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}${extension}`;
+    
+    await mkdir(STORAGE_DIR, { recursive: true });
+    const filePath = path.join(STORAGE_DIR, assetId);
 
-    await mkdir(directory, {recursive: true});
-    await writeFile(path.join(directory, id), Buffer.from(await file.arrayBuffer()));
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await writeFile(filePath, buffer);
 
-    const baseUrl =
-      process.env.APP_BASE_URL ?? new URL(request.url).origin;
+    const url = `/api/assets/${assetId}`;
 
-    return Response.json({
-      id,
-      url: `${baseUrl}/api/assets/${encodeURIComponent(id)}`
+    return NextResponse.json({
+      id: assetId,
+      url,
+      filename: file.name,
+      mimeType: file.type,
+      size: file.size
     });
   } catch (error) {
-    if (error instanceof Response) return error;
-
-    return Response.json(
-      {message: error instanceof Error ? error.message : "Upload failed."},
-      {status: 500}
-    );
+    const message = error instanceof Error ? error.message : "Unknown upload error";
+    return NextResponse.json({ error: `Asset upload failed: ${message}` }, { status: 500 });
   }
 }

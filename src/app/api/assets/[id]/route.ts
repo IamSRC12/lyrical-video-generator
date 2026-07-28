@@ -1,141 +1,63 @@
-import {readFile, stat} from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
+const STORAGE_DIR = path.resolve(process.env.ASSET_STORAGE_PATH ?? "./data/assets");
 
-const contentTypes: Record<string, string> = {
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".flac": "audio/flac",
-  ".ogg": "audio/ogg",
-  ".webm": "video/webm",
-  ".mp4": "video/mp4",
-  ".mov": "video/quicktime",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-  ".ttf": "font/ttf",
-  ".otf": "font/otf",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2"
-};
-
-function getAssetPath(id: string): string | null {
-  if (!/^[a-f0-9-]{36}[.][a-z0-9]{1,8}$/i.test(id)) {
-    return null;
-  }
-
-  const directory = path.resolve(
-    process.env.ASSET_DIRECTORY ?? "./data/assets"
-  );
-
-  return path.join(directory, id);
-}
-
-async function serveAsset(request: Request, id: string, includeBody: boolean) {
-  const filePath = getAssetPath(id);
-
-  if (!filePath) {
-    return new Response("Invalid asset ID.", {status: 400});
-  }
-
-  try {
-    const fileStats = await stat(filePath);
-    const size = fileStats.size;
-    const type =
-      contentTypes[path.extname(id).toLowerCase()] ??
-      "application/octet-stream";
-
-    const commonHeaders = {
-      "Content-Type": type,
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable"
-    };
-
-    const range = request.headers.get("range");
-
-    if (!range) {
-      const data = includeBody ? await readFile(filePath) : null;
-
-      return new Response(data, {
-        status: 200,
-        headers: {
-          ...commonHeaders,
-          "Content-Length": String(size)
-        }
-      });
-    }
-
-    const match = /^bytes=(\d*)-(\d*)$/i.exec(range);
-
-    if (!match) {
-      return new Response("Invalid Range header.", {
-        status: 416,
-        headers: {
-          ...commonHeaders,
-          "Content-Range": `bytes */${size}`
-        }
-      });
-    }
-
-    let start = match[1] ? Number(match[1]) : 0;
-    let end = match[2] ? Number(match[2]) : size - 1;
-
-    if (!match[1] && match[2]) {
-      const suffixLength = Number(match[2]);
-      start = Math.max(0, size - suffixLength);
-      end = size - 1;
-    }
-
-    start = Math.max(0, start);
-    end = Math.min(size - 1, end);
-
-    if (
-      !Number.isFinite(start) ||
-      !Number.isFinite(end) ||
-      start > end ||
-      start >= size
-    ) {
-      return new Response("Requested range is not satisfiable.", {
-        status: 416,
-        headers: {
-          ...commonHeaders,
-          "Content-Range": `bytes */${size}`
-        }
-      });
-    }
-
-    const data = includeBody
-      ? (await readFile(filePath)).subarray(start, end + 1)
-      : null;
-
-    return new Response(data, {
-      status: 206,
-      headers: {
-        ...commonHeaders,
-        "Content-Length": String(end - start + 1),
-        "Content-Range": `bytes ${start}-${end}/${size}`
-      }
-    });
-  } catch {
-    return new Response("Asset not found.", {status: 404});
+function getMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".mp3": return "audio/mpeg";
+    case ".wav": return "audio/wav";
+    case ".m4a": case ".aac": return "audio/mp4";
+    case ".ogg": return "audio/ogg";
+    case ".png": return "image/png";
+    case ".jpg": case ".jpeg": return "image/jpeg";
+    case ".webp": return "image/webp";
+    case ".mp4": return "video/mp4";
+    default: return "application/octet-stream";
   }
 }
 
 export async function GET(
   request: Request,
-  context: {params: Promise<{id: string}>}
+  props: { params: Promise<{ id: string }> }
 ) {
-  const {id} = await context.params;
-  return serveAsset(request, id, true);
-}
+  const params = await props.params;
+  const id = params.id;
 
-export async function HEAD(
-  request: Request,
-  context: {params: Promise<{id: string}>}
-) {
-  const {id} = await context.params;
-  return serveAsset(request, id, false);
+  // Sanitize path traversal attempts
+  const safeFilename = path.basename(id);
+  const filePath = path.join(STORAGE_DIR, safeFilename);
+
+  if (!existsSync(filePath)) {
+    return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+  }
+
+  try {
+    const fileStat = await stat(filePath);
+    const mimeType = getMimeType(filePath);
+
+    const stream = createReadStream(filePath);
+    const readableStream = new ReadableStream({
+      start(controller) {
+        stream.on("data", (chunk) => controller.enqueue(chunk));
+        stream.on("end", () => controller.close());
+        stream.on("error", (err) => controller.error(err));
+      }
+    });
+
+    return new Response(readableStream, {
+      headers: {
+        "Content-Type": mimeType,
+        "Content-Length": fileStat.size.toString(),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=31536000, immutable"
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Stream error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
