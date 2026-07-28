@@ -1,196 +1,246 @@
 "use client";
 
-import {useCallback, useRef, useState} from "react";
-import {useEditorStore} from "@/stores/editor-store";
-import {Waveform} from "./Waveform";
-import {cn} from "@/lib/cn";
-
-const PIXELS_PER_SECOND = 80;
-const TRACK_HEIGHT = 36;
+import type { LyricSegment } from "@/lib/editor-schema";
+import { useEditorStore } from "@/stores/editor-store";
+import { Scissors, Trash2, Unlink, Wand2 } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 
 export function Timeline() {
   const project = useEditorStore((s) => s.project);
-  const playhead = useEditorStore((s) => s.playhead);
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
   const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
-  const setPlayhead = useEditorStore((s) => s.setPlayhead);
   const selectSegment = useEditorStore((s) => s.selectSegment);
-  const moveSegment = useEditorStore((s) => s.moveSegment);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const updateSegmentTime = useEditorStore((s) => s.updateSegmentTime);
+  const splitSegment = useEditorStore((s) => s.splitSegment);
+  const deleteSegment = useEditorStore((s) => s.deleteSegment);
+  const realignSegment = useEditorStore((s) => s.realignSegment);
+
+  const timelineRef = useRef<HTMLDivElement>(null);
+
   const [dragging, setDragging] = useState<{
-    id: string;
-    offsetX: number;
-    startTime: number;
-    endTime: number;
+    segmentId: string;
+    type: "move" | "resize-left" | "resize-right";
+    initialX: number;
+    initialStart: number;
+    initialEnd: number;
   } | null>(null);
 
   if (!project) return null;
 
-  const totalWidth = Math.max(
-    project.duration * PIXELS_PER_SECOND,
-    800
-  );
+  const duration = project.duration || 10;
+  const fps = project.fps || 30;
 
-  // Time ruler ticks
-  const ticks: number[] = [];
-  for (let t = 0; t <= project.duration; t += 1) {
-    ticks.push(t);
-  }
+  const getSnapTime = useCallback(
+    (targetTime: number, excludeId: string): number => {
+      const snapThreshold = 0.15; // 150ms snap radius
+      let bestSnap = targetTime;
+      let minDiff = snapThreshold;
 
-  function timeToX(time: number): number {
-    return time * PIXELS_PER_SECOND;
-  }
+      // 1. Snap to whole frames
+      const frameDuration = 1 / fps;
+      const frameTime = Math.round(targetTime / frameDuration) * frameDuration;
+      if (Math.abs(frameTime - targetTime) < minDiff) {
+        minDiff = Math.abs(frameTime - targetTime);
+        bestSnap = frameTime;
+      }
 
-  function xToTime(x: number): number {
-    return Math.max(0, x / PIXELS_PER_SECOND);
-  }
+      // 2. Snap to detected beat timestamps
+      for (const beat of project.beats || []) {
+        const diff = Math.abs(beat - targetTime);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestSnap = beat;
+        }
+      }
 
-  function handleMouseDown(
-    e: React.MouseEvent,
-    segId: string,
-    start: number,
-    end: number
-  ) {
-    e.stopPropagation();
-    selectSegment(segId);
+      // 3. Snap to adjacent segment edges
+      for (const seg of project.segments) {
+        if (seg.id === excludeId) continue;
 
-    const rect = (e.target as HTMLElement).getBoundingClientRect();
-    setDragging({
-      id: segId,
-      offsetX: e.clientX - rect.left,
-      startTime: start,
-      endTime: end
-    });
-  }
+        const startDiff = Math.abs(seg.start - targetTime);
+        if (startDiff < minDiff) {
+          minDiff = startDiff;
+          bestSnap = seg.start;
+        }
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (!dragging || !scrollRef.current) return;
+        const endDiff = Math.abs(seg.end - targetTime);
+        if (endDiff < minDiff) {
+          minDiff = endDiff;
+          bestSnap = seg.end;
+        }
+      }
 
-      const scrollRect = scrollRef.current.getBoundingClientRect();
-      const x = e.clientX - scrollRect.left + scrollRef.current.scrollLeft;
-      const newStart = xToTime(x - dragging.offsetX);
-      const duration = dragging.endTime - dragging.startTime;
-
-      moveSegment(dragging.id, newStart, newStart + duration);
+      return bestSnap;
     },
-    [dragging, moveSegment]
+    [fps, project.beats, project.segments]
   );
 
-  function handleMouseUp() {
-    setDragging(null);
-  }
+  const handlePointerDown = (
+    e: React.PointerEvent,
+    segment: LyricSegment,
+    type: "move" | "resize-left" | "resize-right"
+  ) => {
+    e.stopPropagation();
+    selectSegment(segment.id);
 
-  function handleTimelineClick(e: React.MouseEvent) {
-    if (!scrollRef.current) return;
-    const scrollRect = scrollRef.current.getBoundingClientRect();
-    const x =
-      e.clientX - scrollRect.left + scrollRef.current.scrollLeft;
-    setPlayhead(xToTime(x));
-  }
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
+    setDragging({
+      segmentId: segment.id,
+      type,
+      initialX: e.clientX,
+      initialStart: segment.start,
+      initialEnd: segment.end
+    });
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!dragging || !timelineRef.current) return;
+
+    const rect = timelineRef.current.getBoundingClientRect();
+    const deltaX = e.clientX - dragging.initialX;
+    const deltaTime = (deltaX / rect.width) * duration;
+
+    if (dragging.type === "move") {
+      const segDuration = dragging.initialEnd - dragging.initialStart;
+      let newStart = Math.max(0, dragging.initialStart + deltaTime);
+      newStart = getSnapTime(newStart, dragging.segmentId);
+      const newEnd = newStart + segDuration;
+
+      updateSegmentTime(dragging.segmentId, newStart, newEnd);
+    } else if (dragging.type === "resize-left") {
+      let newStart = Math.max(0, dragging.initialStart + deltaTime);
+      newStart = getSnapTime(newStart, dragging.segmentId);
+      if (dragging.initialEnd - newStart >= 0.2) {
+        updateSegmentTime(dragging.segmentId, newStart, dragging.initialEnd);
+      }
+    } else if (dragging.type === "resize-right") {
+      let newEnd = Math.min(duration, dragging.initialEnd + deltaTime);
+      newEnd = getSnapTime(newEnd, dragging.segmentId);
+      if (newEnd - dragging.initialStart >= 0.2) {
+        updateSegmentTime(dragging.segmentId, dragging.initialStart, newEnd);
+      }
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (dragging) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore pointer release errors
+      }
+      setDragging(null);
+    }
+  };
+
+  const handleTimelineClick = (e: React.MouseEvent) => {
+    if (!timelineRef.current) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const time = (clickX / rect.width) * duration;
+    setCurrentTime(time);
+  };
+
+  const selectedSeg = project.segments.find((s) => s.id === selectedSegmentId);
 
   return (
-    <div
-      className="editor-timeline flex flex-col overflow-hidden border-t border-white/5 bg-surface-raised"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-    >
-      {/* Waveform strip */}
-      <div className="h-14 border-b border-white/5">
-        <Waveform
-          audioUrl={project.audioUrl}
-          playhead={playhead}
-          duration={project.duration}
-          beats={project.toggles.beatSync ? project.beats : []}
-          onSeek={setPlayhead}
-        />
+    <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950 p-2 border-t border-zinc-800/60">
+      {/* Segment Action Toolbar */}
+      <div className="flex items-center justify-between px-2 pb-2">
+        <div className="flex items-center gap-2">
+          {selectedSeg ? (
+            <>
+              <button
+                onClick={() => splitSegment(selectedSeg.id, currentTime)}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-yellow-500/50 hover:text-white"
+              >
+                <Scissors className="h-3.5 w-3.5 text-yellow-400" />
+                <span>Split at Playhead</span>
+              </button>
+
+              <button
+                onClick={() => realignSegment(selectedSeg.id)}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-yellow-500/50 hover:text-white"
+              >
+                <Wand2 className="h-3.5 w-3.5 text-yellow-400" />
+                <span>Auto-Realign</span>
+              </button>
+
+              <button
+                onClick={() => deleteSegment(selectedSeg.id)}
+                className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/20"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Delete</span>
+              </button>
+            </>
+          ) : (
+            <span className="text-xs text-zinc-500">Select a lyric block below to edit timing or split</span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-zinc-500 font-mono">
+          <span>Snapping Active (Beats & Frames)</span>
+        </div>
       </div>
 
-      {/* Timeline tracks */}
+      {/* Track Workspace */}
       <div
-        ref={scrollRef}
-        className="relative flex-1 overflow-x-auto overflow-y-hidden"
+        ref={timelineRef}
         onClick={handleTimelineClick}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        className="relative flex-1 rounded-xl border border-zinc-800/80 bg-zinc-900/60 overflow-hidden cursor-crosshair"
       >
+        {/* Playhead Marker Line */}
         <div
-          className="relative"
-          style={{
-            width: totalWidth,
-            minHeight: TRACK_HEIGHT + 40
-          }}
+          className="absolute top-0 bottom-0 z-30 w-0.5 bg-yellow-400 pointer-events-none"
+          style={{ left: `${(currentTime / duration) * 100}%` }}
         >
-          {/* Time ruler */}
-          <div className="sticky top-0 z-10 flex h-5 border-b border-white/5 bg-surface-raised/80 backdrop-blur-sm">
-            {ticks.map((t) => (
-              <div
-                key={t}
-                className="absolute top-0 flex h-full items-end"
-                style={{left: timeToX(t)}}
-              >
-                <div className="h-2 w-px bg-white/15" />
-                {t % 5 === 0 && (
-                  <span className="ml-1 text-[9px] text-slate-600">
-                    {Math.floor(t / 60)}:{String(Math.floor(t % 60)).padStart(2, "0")}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Segment blocks */}
-          <div className="relative mt-1" style={{height: TRACK_HEIGHT}}>
-            {project.segments.map((segment) => {
-              const left = timeToX(segment.start);
-              const width = Math.max(
-                timeToX(segment.end - segment.start),
-                20
-              );
-
-              return (
-                <div
-                  key={segment.id}
-                  className={cn(
-                    "absolute top-0 flex cursor-grab items-center overflow-hidden rounded-md border px-2 text-[10px] font-medium transition-colors select-none",
-                    "border-violet-500/20 bg-violet-500/10 text-violet-200",
-                    "hover:border-violet-500/40 hover:bg-violet-500/15",
-                    selectedSegmentId === segment.id &&
-                      "border-violet-500/60 bg-violet-500/20 ring-1 ring-violet-500/30",
-                    dragging?.id === segment.id && "cursor-grabbing opacity-80"
-                  )}
-                  style={{
-                    left,
-                    width,
-                    height: TRACK_HEIGHT
-                  }}
-                  onMouseDown={(e) =>
-                    handleMouseDown(e, segment.id, segment.start, segment.end)
-                  }
-                >
-                  <span className="truncate">{segment.line}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Beat markers */}
-          {project.toggles.beatSync &&
-            project.beats.map((beat, i) => (
-              <div
-                key={i}
-                className="absolute top-5 h-full w-px bg-cyan-500/15"
-                style={{left: timeToX(beat)}}
-              />
-            ))}
-
-          {/* Playhead line */}
-          <div
-            className="absolute top-0 z-20 h-full w-0.5 bg-violet-500"
-            style={{left: timeToX(playhead)}}
-          >
-            <div className="absolute -left-1.5 -top-0.5 h-2.5 w-3.5 rounded-sm bg-violet-500" />
-          </div>
+          <div className="h-3 w-3 -translate-x-[5px] rotate-45 rounded-sm bg-yellow-400 shadow-md" />
         </div>
+
+        {/* Lyric Segment Blocks */}
+        {project.segments.map((seg) => {
+          const leftPercent = (seg.start / duration) * 100;
+          const widthPercent = Math.max(0.5, ((seg.end - seg.start) / duration) * 100);
+          const isSelected = seg.id === selectedSegmentId;
+
+          return (
+            <div
+              key={seg.id}
+              onPointerDown={(e) => handlePointerDown(e, seg, "move")}
+              className={`absolute top-3 bottom-3 rounded-lg border text-xs flex items-center px-3 font-semibold transition-colors group cursor-grab active:cursor-grabbing overflow-hidden ${
+                isSelected
+                  ? "border-yellow-400 bg-yellow-500/25 text-yellow-200 shadow-lg shadow-yellow-500/10 z-20"
+                  : seg.requiresReview
+                  ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:border-amber-400 z-10"
+                  : "border-zinc-700 bg-zinc-800/80 text-zinc-200 hover:border-zinc-600 z-10"
+              }`}
+              style={{
+                left: `${leftPercent}%`,
+                width: `${widthPercent}%`
+              }}
+            >
+              {/* Left Resize Handle */}
+              <div
+                onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
+                className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-zinc-700/50 hover:bg-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              />
+
+              <span className="truncate select-none">{seg.line}</span>
+
+              {/* Right Resize Handle */}
+              <div
+                onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
+                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-zinc-700/50 hover:bg-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );

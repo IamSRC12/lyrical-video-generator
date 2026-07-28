@@ -1,427 +1,410 @@
 "use client";
 
-import {useRef, useState} from "react";
-import {
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
-  ImagePlus,
-  LoaderCircle,
-  Move,
-  Palette,
-  Sparkles,
-  Trash2,
-  Type
-} from "lucide-react";
-import {useEditorStore} from "@/stores/editor-store";
-import type {AnimationName} from "@/lib/editor-schema";
-import {uploadAsset} from "@/services/asset-client";
-import {toast} from "sonner";
-import {cn} from "@/lib/cn";
-
-const ANIMATION_OPTIONS: Array<{value: AnimationName; label: string; emoji: string}> = [
-  {value: "fade", label: "Fade", emoji: "✨"},
-  {value: "slide_up", label: "Slide Up", emoji: "⬆️"},
-  {value: "pop", label: "Pop", emoji: "💥"},
-  {value: "neon_pulse", label: "Neon Pulse", emoji: "💜"},
-  {value: "zoom_blur", label: "Zoom Blur", emoji: "🔍"},
-  {value: "rain", label: "Rain", emoji: "🌧️"},
-  {value: "shake", label: "Shake", emoji: "📳"}
-];
+import type { AnimationName } from "@/lib/editor-schema";
+import { getStoredNvidiaKey } from "@/services/api-keys";
+import { useEditorStore } from "@/stores/editor-store";
+import { Download, Layers, Palette, Sparkles, Type, Wand2 } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 
 export function LeftPanel() {
   const project = useEditorStore((s) => s.project);
+  const updateTextStyle = useEditorStore((s) => s.updateTextStyle);
   const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
-  const selectSegment = useEditorStore((s) => s.selectSegment);
-  const setAnimation = useEditorStore((s) => s.setAnimation);
-  const setBackground = useEditorStore((s) => s.setBackground);
-  const patchTextStyle = useEditorStore((s) => s.patchTextStyle);
-  const setToggle = useEditorStore((s) => s.setToggle);
+  const setSegmentAnimation = useEditorStore((s) => s.setSegmentAnimation);
+  const setAllAnimations = useEditorStore((s) => s.setAllAnimations);
 
-  const backgroundInputRef = useRef<HTMLInputElement>(null);
-  const [uploadingBackground, setUploadingBackground] = useState(false);
+  const [activeTab, setActiveTab] = useState<"style" | "animation" | "ai" | "export">("style");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
 
   if (!project) return null;
 
-  const selectedSegment = project.segments.find(
-    (s) => s.id === selectedSegmentId
-  );
+  const style = project.textStyle;
+  const selectedSeg = project.segments.find((s) => s.id === selectedSegmentId);
 
-  async function uploadBackground(file: File) {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image background.");
-      return;
-    }
+  const handleExportMp4 = async () => {
+    setIsExporting(true);
+    setExportProgress(0);
 
     try {
-      setUploadingBackground(true);
-      const url = await uploadAsset(file);
-      setBackground(url);
-      toast.success("Background inserted.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Background upload failed."
-      );
+      const response = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project })
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.error || `Export request failed (HTTP ${response.status})`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No readable stream received from server export endpoint");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            if (event.type === "progress") {
+              setExportProgress(Math.round(event.progress * 100));
+            } else if (event.type === "done") {
+              setExportProgress(100);
+              toast.success("MP4 Video successfully rendered!");
+              
+              // Trigger file download
+              const link = document.createElement("a");
+              link.href = event.url;
+              link.download = `${project.title || "lyrical-video"}.mp4`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }
+          } catch {
+            // Ignore parse errors for partial chunks
+          }
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed");
     } finally {
-      setUploadingBackground(false);
+      setIsExporting(false);
     }
-  }
+  };
+
+  const handleRegenerateAiAnimations = async () => {
+    setIsGeneratingAi(true);
+    try {
+      const nvidiaKey = await getStoredNvidiaKey();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (nvidiaKey) headers["x-nvidia-key"] = nvidiaKey;
+
+      const res = await fetch("/api/nvidia/animations", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          segments: project.segments,
+          bpm: project.bpm || 120,
+          moodHint: "cinematic"
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "AI generation request failed");
+      }
+
+      const data = await res.json();
+      if (data.segments?.length) {
+        useEditorStore.setState((s) => {
+          if (!s.project) return s;
+          return {
+            ...s,
+            project: { ...s.project, segments: data.segments }
+          };
+        });
+        toast.success("AI motion graphics regenerated for all segments!");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "AI generation failed");
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
 
   return (
-    <aside className="editor-sidebar flex flex-col overflow-hidden border-r border-white/5 bg-surface-raised">
-      <div className="flex-1 overflow-y-auto divide-y divide-white/5">
-        {/* Background Controls */}
-        <div className="space-y-3 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-            <ImagePlus size={12} />
-            Background
-          </div>
+    <aside className="w-80 border-r border-zinc-800 bg-zinc-900 flex flex-col shrink-0">
+      {/* Tab Selectors */}
+      <div className="flex border-b border-zinc-800 bg-zinc-950 p-1">
+        <button
+          onClick={() => setActiveTab("style")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "style"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Type className="h-3.5 w-3.5" />
+          <span>Text</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("animation")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "animation"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span>Motion</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("ai")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "ai"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>AI</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("export")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "export"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Download className="h-3.5 w-3.5" />
+          <span>Export</span>
+        </button>
+      </div>
 
-          <input
-            ref={backgroundInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void uploadBackground(file);
-              event.currentTarget.value = "";
-            }}
-          />
+      {/* Tab Panels */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        {activeTab === "style" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Type className="h-4 w-4 text-yellow-400" />
+              <span>Typography & Colors</span>
+            </h2>
 
-          <button
-            type="button"
-            className="button-secondary w-full text-xs"
-            disabled={uploadingBackground}
-            onClick={() => backgroundInputRef.current?.click()}
-          >
-            {uploadingBackground ? (
-              <LoaderCircle size={14} className="animate-spin" />
-            ) : (
-              <ImagePlus size={14} />
-            )}
-            Upload background image
-          </button>
-
-          {project.backgroundUrl && (
-            <div className="space-y-2">
-              <img
-                src={project.backgroundUrl}
-                alt="Background preview"
-                className="h-24 w-full rounded-lg object-cover border border-white/10"
-              />
-
-              <button
-                type="button"
-                className="button-ghost w-full text-xs text-red-400"
-                onClick={() => setBackground(undefined)}
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">Font Family</label>
+              <select
+                value={style.fontFamily}
+                onChange={(e) => updateTextStyle({ fontFamily: e.target.value })}
+                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
               >
-                <Trash2 size={14} />
-                Remove image
-              </button>
+                <option value="Inter">Inter (Sans-Serif)</option>
+                <option value="Roboto">Roboto</option>
+                <option value="Impact">Impact (Bold Heavy)</option>
+                <option value="Montserrat">Montserrat</option>
+                <option value="Georgia">Georgia (Serif)</option>
+                <option value="Courier New">Courier New (Mono)</option>
+              </select>
             </div>
-          )}
 
-          <label className="block">
-            <span className="label text-xs">Canvas Color</span>
-            <input
-              type="color"
-              value={project.backgroundColor}
-              onChange={(event) =>
-                useEditorStore.setState((state) =>
-                  state.project
-                    ? {
-                        project: {
-                          ...state.project,
-                          backgroundColor: event.target.value
-                        }
-                      }
-                    : state
-                )
-              }
-              className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-            />
-          </label>
-        </div>
-
-        {/* Text Style Controls */}
-        <div className="space-y-4 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-            <Type size={12} />
-            Typography
-          </div>
-
-          {/* Font Size & Weight */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label text-xs">Size ({project.textStyle.fontSize}px)</label>
-              <input
-                type="range"
-                min={20}
-                max={220}
-                step={2}
-                value={project.textStyle.fontSize}
-                onChange={(e) =>
-                  patchTextStyle({fontSize: Number(e.target.value)})
-                }
-                className="w-full accent-violet-500"
-              />
-            </div>
-            <div>
-              <label className="label text-xs">Weight ({project.textStyle.fontWeight})</label>
-              <input
-                type="range"
-                min={100}
-                max={900}
-                step={100}
-                value={project.textStyle.fontWeight}
-                onChange={(e) =>
-                  patchTextStyle({fontWeight: Number(e.target.value)})
-                }
-                className="w-full accent-violet-500"
-              />
-            </div>
-          </div>
-
-          {/* Line Height & Letter Spacing */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label text-xs">Line Height ({project.textStyle.lineHeight})</label>
-              <input
-                type="range"
-                min={0.8}
-                max={2}
-                step={0.1}
-                value={project.textStyle.lineHeight}
-                onChange={(e) =>
-                  patchTextStyle({lineHeight: Number(e.target.value)})
-                }
-                className="w-full accent-violet-500"
-              />
-            </div>
-            <div>
-              <label className="label text-xs">Spacing ({project.textStyle.letterSpacing}px)</label>
-              <input
-                type="range"
-                min={-5}
-                max={20}
-                step={1}
-                value={project.textStyle.letterSpacing}
-                onChange={(e) =>
-                  patchTextStyle({letterSpacing: Number(e.target.value)})
-                }
-                className="w-full accent-violet-500"
-              />
-            </div>
-          </div>
-
-          {/* Colors */}
-          <div className="grid grid-cols-3 gap-2">
-            <label className="block">
-              <span className="label text-xs">Text</span>
-              <input
-                type="color"
-                value={project.textStyle.color}
-                onChange={(e) => patchTextStyle({color: e.target.value})}
-                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-              />
-            </label>
-            <label className="block">
-              <span className="label text-xs">Highlight</span>
-              <input
-                type="color"
-                value={project.textStyle.highlightColor}
-                onChange={(e) =>
-                  patchTextStyle({highlightColor: e.target.value})
-                }
-                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-              />
-            </label>
-            <label className="block">
-              <span className="label text-xs">Outline</span>
-              <input
-                type="color"
-                value={project.textStyle.outlineColor}
-                onChange={(e) =>
-                  patchTextStyle({outlineColor: e.target.value})
-                }
-                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-              />
-            </label>
-          </div>
-
-          {/* Alignment */}
-          <div className="flex gap-1">
-            {(["left", "center", "right"] as const).map((align) => (
-              <button
-                key={align}
-                className={cn(
-                  "button-ghost flex-1",
-                  project.textStyle.align === align && "bg-white/8 text-violet-400"
-                )}
-                onClick={() => patchTextStyle({align})}
-              >
-                {align === "left" && <AlignLeft size={14} />}
-                {align === "center" && <AlignCenter size={14} />}
-                {align === "right" && <AlignRight size={14} />}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Position & Box Styling */}
-        <div className="space-y-4 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-            <Move size={12} />
-            Position & Box
-          </div>
-
-          {/* Position X & Y */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label text-xs">Pos X ({project.textStyle.positionX}%)</label>
-              <input
-                type="range"
-                min={10}
-                max={90}
-                value={project.textStyle.positionX}
-                onChange={(e) =>
-                  patchTextStyle({positionX: Number(e.target.value)})
-                }
-                className="w-full accent-violet-500"
-              />
-            </div>
-            <div>
-              <label className="label text-xs">Pos Y ({project.textStyle.positionY}%)</label>
-              <input
-                type="range"
-                min={10}
-                max={90}
-                value={project.textStyle.positionY}
-                onChange={(e) =>
-                  patchTextStyle({positionY: Number(e.target.value)})
-                }
-                className="w-full accent-violet-500"
-              />
-            </div>
-          </div>
-
-          {/* Box Background & Opacity */}
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className="label text-xs">Box Color</span>
-              <input
-                type="color"
-                value={project.textStyle.backgroundColor}
-                onChange={(e) =>
-                  patchTextStyle({backgroundColor: e.target.value})
-                }
-                className="h-8 w-full cursor-pointer rounded border border-white/10 bg-transparent"
-              />
-            </label>
-            <div>
-              <label className="label text-xs">
-                Opacity ({Math.round(project.textStyle.backgroundOpacity * 100)}%)
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={project.textStyle.backgroundOpacity}
-                onChange={(e) =>
-                  patchTextStyle({backgroundOpacity: Number(e.target.value)})
-                }
-                className="w-full accent-violet-500"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Feature Toggles */}
-        <div className="space-y-3 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-            <Sparkles size={12} />
-            Features
-          </div>
-
-          {(
-            [
-              ["karaokeHighlight", "Karaoke Highlight"],
-              ["beatSync", "Beat Sync"],
-              ["contextualAnimations", "AI Animations"]
-            ] as const
-          ).map(([key, label]) => (
-            <label
-              key={key}
-              className="flex items-center justify-between text-sm cursor-pointer"
-            >
-              <span>{label}</span>
-              <input
-                type="checkbox"
-                className="toggle"
-                checked={project.toggles[key]}
-                onChange={(e) => setToggle(key, e.target.checked)}
-              />
-            </label>
-          ))}
-        </div>
-
-        {/* Segment List */}
-        <div className="p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">
-            <Palette size={12} />
-            Segments ({project.segments.length})
-          </div>
-
-          <div className="space-y-1">
-            {project.segments.map((segment) => (
-              <div
-                key={segment.id}
-                className={cn(
-                  "cursor-pointer rounded-lg border border-transparent p-3 text-sm transition-all",
-                  "hover:border-white/8 hover:bg-white/3",
-                  selectedSegmentId === segment.id &&
-                    "border-violet-500/30 bg-violet-500/8"
-                )}
-                onClick={() => selectSegment(segment.id)}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex-1 truncate font-medium">
-                    {segment.line}
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    {segment.start.toFixed(1)}s
-                  </span>
-                </div>
-
-                {selectedSegmentId === segment.id && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {ANIMATION_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        className={cn(
-                          "rounded-md px-2 py-0.5 text-[10px] font-medium transition-all",
-                          "border border-white/8 hover:border-violet-500/30",
-                          segment.animation === opt.value &&
-                            "border-violet-500 bg-violet-500/15 text-violet-300"
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAnimation(segment.id, opt.value);
-                        }}
-                      >
-                        {opt.emoji} {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Size ({style.fontSize}px)</label>
+                <input
+                  type="range"
+                  min="20"
+                  max="180"
+                  value={style.fontSize}
+                  onChange={(e) => updateTextStyle({ fontSize: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
               </div>
-            ))}
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Weight ({style.fontWeight})</label>
+                <input
+                  type="range"
+                  min="300"
+                  max="900"
+                  step="100"
+                  value={style.fontWeight}
+                  onChange={(e) => updateTextStyle({ fontWeight: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Text Color</label>
+                <input
+                  type="color"
+                  value={style.color}
+                  onChange={(e) => updateTextStyle({ color: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Karaoke Highlight</label>
+                <input
+                  type="color"
+                  value={style.highlightColor}
+                  onChange={(e) => updateTextStyle({ highlightColor: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke Color</label>
+                <input
+                  type="color"
+                  value={style.outlineColor}
+                  onChange={(e) => updateTextStyle({ outlineColor: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke Width ({style.outlineWidth}px)</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="10"
+                  value={style.outlineWidth}
+                  onChange={(e) => updateTextStyle({ outlineWidth: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">Vertical Position ({style.positionY}%)</label>
+              <input
+                type="range"
+                min="10"
+                max="90"
+                value={style.positionY}
+                onChange={(e) => updateTextStyle({ positionY: Number(e.target.value) })}
+                className="w-full accent-yellow-400"
+              />
+            </div>
           </div>
-        </div>
+        )}
+
+        {activeTab === "animation" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Layers className="h-4 w-4 text-yellow-400" />
+              <span>Motion Graphic Animations</span>
+            </h2>
+
+            {selectedSeg ? (
+              <div className="rounded-xl bg-zinc-950 p-3 border border-zinc-850 space-y-3">
+                <div className="text-xs font-semibold text-zinc-300">
+                  Editing Selected Segment: <span className="text-yellow-400 font-mono">"{selectedSeg.line}"</span>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Animation Type</label>
+                  <select
+                    value={selectedSeg.animation}
+                    onChange={(e) => setSegmentAnimation(selectedSeg.id, e.target.value as AnimationName)}
+                    className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
+                  >
+                    <option value="fade">Fade In/Out</option>
+                    <option value="slide_up">Slide Up</option>
+                    <option value="pop">Pop & Scale</option>
+                    <option value="neon_pulse">Neon Glow Pulse</option>
+                    <option value="zoom_blur">Zoom Blur</option>
+                    <option value="rain">Lyric Rain</option>
+                    <option value="shake">Camera Shake</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500">Select a line on the timeline to customize its specific animation.</p>
+            )}
+
+            <div className="pt-2">
+              <label className="block text-xs font-medium text-zinc-300 mb-2">Apply Animation to ALL Segments</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(["fade", "slide_up", "pop", "neon_pulse", "zoom_blur", "rain", "shake"] as AnimationName[]).map((anim) => (
+                  <button
+                    key={anim}
+                    onClick={() => setAllAnimations(anim)}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950 py-2 text-xs font-semibold text-zinc-300 hover:border-yellow-500/50 hover:text-yellow-400 transition-all capitalize"
+                  >
+                    {anim.replace("_", " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "ai" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-yellow-400" />
+              <span>NVIDIA NIM AI Assistant</span>
+            </h2>
+
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Use Llama 3.3 70B to analyze lyric context and assign dynamic motion graphic presets matching the song's energy.
+            </p>
+
+            <button
+              onClick={handleRegenerateAiAnimations}
+              disabled={isGeneratingAi}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-2.5 text-xs font-bold text-zinc-950 hover:brightness-110 disabled:opacity-50 transition-all shadow-md shadow-yellow-500/20"
+            >
+              <Wand2 className="h-4 w-4" />
+              <span>{isGeneratingAi ? "Generating AI Animations..." : "Auto-Assign AI Animations"}</span>
+            </button>
+          </div>
+        )}
+
+        {activeTab === "export" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Download className="h-4 w-4 text-yellow-400" />
+              <span>Export Production MP4</span>
+            </h2>
+
+            <div className="rounded-xl bg-zinc-950 p-4 border border-zinc-850 space-y-2 text-xs">
+              <div className="flex justify-between text-zinc-400">
+                <span>Resolution</span>
+                <span className="text-white font-mono">{project.width}x{project.height}</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Frame Rate</span>
+                <span className="text-white font-mono">{project.fps} FPS</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Duration</span>
+                <span className="text-white font-mono">{project.duration.toFixed(2)}s</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Codec</span>
+                <span className="text-white font-mono">H.264 / AAC</span>
+              </div>
+            </div>
+
+            {isExporting ? (
+              <div className="space-y-2 rounded-xl bg-zinc-950 p-4 border border-zinc-800">
+                <div className="flex justify-between text-xs font-semibold text-zinc-300">
+                  <span>Rendering MP4 video...</span>
+                  <span className="text-yellow-400">{exportProgress}%</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full bg-yellow-400 transition-all duration-300"
+                    style={{ width: `${exportProgress}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={handleExportMp4}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-3 text-xs font-bold text-zinc-950 hover:brightness-110 shadow-lg shadow-yellow-500/20"
+              >
+                <Download className="h-4 w-4" />
+                <span>Render & Download MP4</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );

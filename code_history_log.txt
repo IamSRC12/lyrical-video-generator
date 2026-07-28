@@ -1,4 +1,917 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 00:23:33
+FILE PATH: src/components/editor/Waveform.tsx
+ACTION: Modified
+================================================================================
+"use client";
+
+import { useEditorStore } from "@/stores/editor-store";
+import { useEffect, useRef } from "react";
+
+export function Waveform() {
+  const project = useEditorStore((s) => s.project);
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const waveformDataRef = useRef<Float32Array | null>(null);
+
+  // Decode audio data once into downsampled 2000 points
+  useEffect(() => {
+    if (!project?.audioUrl) return;
+
+    let isCancelled = false;
+
+    async function loadAudioWaveform() {
+      try {
+        const response = await fetch(project!.audioUrl);
+        const arrayBuffer = await response.arrayBuffer();
+
+        const audioCtx = new AudioContext();
+        const buffer = await audioCtx.decodeAudioData(arrayBuffer);
+        const rawData = buffer.getChannelData(0);
+
+        const samples = 1800;
+        const step = Math.floor(rawData.length / samples);
+        const downsampled = new Float32Array(samples);
+
+        for (let i = 0; i < samples; i++) {
+          let max = 0;
+          const start = i * step;
+          const end = Math.min(start + step, rawData.length);
+          for (let j = start; j < end; j++) {
+            const val = Math.abs(rawData[j]);
+            if (val > max) max = val;
+          }
+          downsampled[i] = max;
+        }
+
+        if (!isCancelled) {
+          waveformDataRef.current = downsampled;
+          drawCanvas();
+        }
+
+        await audioCtx.close();
+      } catch (err) {
+        console.warn("Waveform decoding failed:", err);
+      }
+    }
+
+    loadAudioWaveform();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [project?.audioUrl]);
+
+  const drawCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !project) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = canvas.offsetWidth;
+    const height = canvas.offsetHeight;
+    canvas.width = width;
+    canvas.height = height;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const duration = project.duration || 10;
+    const data = waveformDataRef.current;
+
+    // Draw baseline
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, height / 2);
+    ctx.lineTo(width, height / 2);
+    ctx.stroke();
+
+    // Draw detected beat lines
+    if (project.beats?.length) {
+      ctx.strokeStyle = "rgba(234, 179, 8, 0.35)";
+      ctx.lineWidth = 1;
+      for (const beat of project.beats) {
+        const x = (beat / duration) * width;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+    }
+
+    // Draw waveform bars
+    if (data && data.length) {
+      const barWidth = width / data.length;
+      for (let i = 0; i < data.length; i++) {
+        const x = i * barWidth;
+        const barHeight = data[i] * (height * 0.85);
+
+        const timeAtBar = (i / data.length) * duration;
+        if (timeAtBar <= currentTime) {
+          ctx.fillStyle = "#eab308"; // Active yellow
+        } else {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+        }
+
+        ctx.fillRect(x, (height - barHeight) / 2, Math.max(1, barWidth - 0.5), barHeight);
+      }
+    }
+
+    // Draw playhead vertical marker
+    const playheadX = (currentTime / duration) * width;
+    ctx.strokeStyle = "#eab308";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(playheadX, 0);
+    ctx.lineTo(playheadX, height);
+    ctx.stroke();
+  };
+
+  useEffect(() => {
+    drawCanvas();
+  }, [currentTime, project]);
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !project) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const time = (clickX / rect.width) * project.duration;
+    setCurrentTime(time);
+  };
+
+  if (!project) return null;
+
+  return (
+    <div className="relative h-16 w-full shrink-0 bg-zinc-950 px-2 py-1">
+      <canvas
+        ref={canvasRef}
+        onClick={handleCanvasClick}
+        className="h-full w-full cursor-pointer rounded-lg border border-zinc-850"
+      />
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:23:21
+FILE PATH: src/components/editor/Timeline.tsx
+ACTION: Created
+================================================================================
+"use client";
+
+import type { LyricSegment } from "@/lib/editor-schema";
+import { useEditorStore } from "@/stores/editor-store";
+import { Scissors, Trash2, Unlink, Wand2 } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
+
+export function Timeline() {
+  const project = useEditorStore((s) => s.project);
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
+  const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
+  const selectSegment = useEditorStore((s) => s.selectSegment);
+
+  const updateSegmentTime = useEditorStore((s) => s.updateSegmentTime);
+  const splitSegment = useEditorStore((s) => s.splitSegment);
+  const deleteSegment = useEditorStore((s) => s.deleteSegment);
+  const realignSegment = useEditorStore((s) => s.realignSegment);
+
+  const timelineRef = useRef<HTMLDivElement>(null);
+
+  const [dragging, setDragging] = useState<{
+    segmentId: string;
+    type: "move" | "resize-left" | "resize-right";
+    initialX: number;
+    initialStart: number;
+    initialEnd: number;
+  } | null>(null);
+
+  if (!project) return null;
+
+  const duration = project.duration || 10;
+  const fps = project.fps || 30;
+
+  const getSnapTime = useCallback(
+    (targetTime: number, excludeId: string): number => {
+      const snapThreshold = 0.15; // 150ms snap radius
+      let bestSnap = targetTime;
+      let minDiff = snapThreshold;
+
+      // 1. Snap to whole frames
+      const frameDuration = 1 / fps;
+      const frameTime = Math.round(targetTime / frameDuration) * frameDuration;
+      if (Math.abs(frameTime - targetTime) < minDiff) {
+        minDiff = Math.abs(frameTime - targetTime);
+        bestSnap = frameTime;
+      }
+
+      // 2. Snap to detected beat timestamps
+      for (const beat of project.beats || []) {
+        const diff = Math.abs(beat - targetTime);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestSnap = beat;
+        }
+      }
+
+      // 3. Snap to adjacent segment edges
+      for (const seg of project.segments) {
+        if (seg.id === excludeId) continue;
+
+        const startDiff = Math.abs(seg.start - targetTime);
+        if (startDiff < minDiff) {
+          minDiff = startDiff;
+          bestSnap = seg.start;
+        }
+
+        const endDiff = Math.abs(seg.end - targetTime);
+        if (endDiff < minDiff) {
+          minDiff = endDiff;
+          bestSnap = seg.end;
+        }
+      }
+
+      return bestSnap;
+    },
+    [fps, project.beats, project.segments]
+  );
+
+  const handlePointerDown = (
+    e: React.PointerEvent,
+    segment: LyricSegment,
+    type: "move" | "resize-left" | "resize-right"
+  ) => {
+    e.stopPropagation();
+    selectSegment(segment.id);
+
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
+    setDragging({
+      segmentId: segment.id,
+      type,
+      initialX: e.clientX,
+      initialStart: segment.start,
+      initialEnd: segment.end
+    });
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!dragging || !timelineRef.current) return;
+
+    const rect = timelineRef.current.getBoundingClientRect();
+    const deltaX = e.clientX - dragging.initialX;
+    const deltaTime = (deltaX / rect.width) * duration;
+
+    if (dragging.type === "move") {
+      const segDuration = dragging.initialEnd - dragging.initialStart;
+      let newStart = Math.max(0, dragging.initialStart + deltaTime);
+      newStart = getSnapTime(newStart, dragging.segmentId);
+      const newEnd = newStart + segDuration;
+
+      updateSegmentTime(dragging.segmentId, newStart, newEnd);
+    } else if (dragging.type === "resize-left") {
+      let newStart = Math.max(0, dragging.initialStart + deltaTime);
+      newStart = getSnapTime(newStart, dragging.segmentId);
+      if (dragging.initialEnd - newStart >= 0.2) {
+        updateSegmentTime(dragging.segmentId, newStart, dragging.initialEnd);
+      }
+    } else if (dragging.type === "resize-right") {
+      let newEnd = Math.min(duration, dragging.initialEnd + deltaTime);
+      newEnd = getSnapTime(newEnd, dragging.segmentId);
+      if (newEnd - dragging.initialStart >= 0.2) {
+        updateSegmentTime(dragging.segmentId, dragging.initialStart, newEnd);
+      }
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (dragging) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore pointer release errors
+      }
+      setDragging(null);
+    }
+  };
+
+  const handleTimelineClick = (e: React.MouseEvent) => {
+    if (!timelineRef.current) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const time = (clickX / rect.width) * duration;
+    setCurrentTime(time);
+  };
+
+  const selectedSeg = project.segments.find((s) => s.id === selectedSegmentId);
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950 p-2 border-t border-zinc-800/60">
+      {/* Segment Action Toolbar */}
+      <div className="flex items-center justify-between px-2 pb-2">
+        <div className="flex items-center gap-2">
+          {selectedSeg ? (
+            <>
+              <button
+                onClick={() => splitSegment(selectedSeg.id, currentTime)}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-yellow-500/50 hover:text-white"
+              >
+                <Scissors className="h-3.5 w-3.5 text-yellow-400" />
+                <span>Split at Playhead</span>
+              </button>
+
+              <button
+                onClick={() => realignSegment(selectedSeg.id)}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:border-yellow-500/50 hover:text-white"
+              >
+                <Wand2 className="h-3.5 w-3.5 text-yellow-400" />
+                <span>Auto-Realign</span>
+              </button>
+
+              <button
+                onClick={() => deleteSegment(selectedSeg.id)}
+                className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/20"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Delete</span>
+              </button>
+            </>
+          ) : (
+            <span className="text-xs text-zinc-500">Select a lyric block below to edit timing or split</span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-zinc-500 font-mono">
+          <span>Snapping Active (Beats & Frames)</span>
+        </div>
+      </div>
+
+      {/* Track Workspace */}
+      <div
+        ref={timelineRef}
+        onClick={handleTimelineClick}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        className="relative flex-1 rounded-xl border border-zinc-800/80 bg-zinc-900/60 overflow-hidden cursor-crosshair"
+      >
+        {/* Playhead Marker Line */}
+        <div
+          className="absolute top-0 bottom-0 z-30 w-0.5 bg-yellow-400 pointer-events-none"
+          style={{ left: `${(currentTime / duration) * 100}%` }}
+        >
+          <div className="h-3 w-3 -translate-x-[5px] rotate-45 rounded-sm bg-yellow-400 shadow-md" />
+        </div>
+
+        {/* Lyric Segment Blocks */}
+        {project.segments.map((seg) => {
+          const leftPercent = (seg.start / duration) * 100;
+          const widthPercent = Math.max(0.5, ((seg.end - seg.start) / duration) * 100);
+          const isSelected = seg.id === selectedSegmentId;
+
+          return (
+            <div
+              key={seg.id}
+              onPointerDown={(e) => handlePointerDown(e, seg, "move")}
+              className={`absolute top-3 bottom-3 rounded-lg border text-xs flex items-center px-3 font-semibold transition-colors group cursor-grab active:cursor-grabbing overflow-hidden ${
+                isSelected
+                  ? "border-yellow-400 bg-yellow-500/25 text-yellow-200 shadow-lg shadow-yellow-500/10 z-20"
+                  : seg.requiresReview
+                  ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:border-amber-400 z-10"
+                  : "border-zinc-700 bg-zinc-800/80 text-zinc-200 hover:border-zinc-600 z-10"
+              }`}
+              style={{
+                left: `${leftPercent}%`,
+                width: `${widthPercent}%`
+              }}
+            >
+              {/* Left Resize Handle */}
+              <div
+                onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
+                className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-zinc-700/50 hover:bg-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              />
+
+              <span className="truncate select-none">{seg.line}</span>
+
+              {/* Right Resize Handle */}
+              <div
+                onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
+                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-zinc-700/50 hover:bg-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:23:08
+FILE PATH: src/components/editor/PreviewCanvas.tsx
+ACTION: Created
+================================================================================
+"use client";
+
+import { LyricalComposition } from "@/remotion/Composition";
+import { useEditorStore } from "@/stores/editor-store";
+import { Player, PlayerRef } from "@remotion/player";
+import { useEffect, useRef } from "react";
+
+export function PreviewCanvas() {
+  const project = useEditorStore((s) => s.project);
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const isPlaying = useEditorStore((s) => s.isPlaying);
+  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
+
+  const playerRef = useRef<PlayerRef>(null);
+
+  if (!project) return null;
+
+  const durationInFrames = Math.max(1, Math.ceil((project.duration || 10) * project.fps));
+  const currentFrame = Math.floor(currentTime * project.fps);
+
+  // Sync player play/pause state
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+
+    if (isPlaying) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }, [isPlaying]);
+
+  // Sync player seek position when currentTime changes
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+
+    const frame = Math.floor(currentTime * project.fps);
+    if (Math.abs(player.getCurrentFrame() - frame) > 1) {
+      player.seekTo(frame);
+    }
+  }, [currentTime, project.fps]);
+
+  return (
+    <div className="relative aspect-video h-full max-h-full max-w-full overflow-hidden rounded-xl border border-zinc-800 bg-black shadow-2xl flex items-center justify-center">
+      <Player
+        ref={playerRef}
+        component={LyricalComposition}
+        inputProps={{ project }}
+        durationInFrames={durationInFrames}
+        compositionWidth={project.width}
+        compositionHeight={project.height}
+        fps={project.fps}
+        style={{
+          width: "100%",
+          height: "100%",
+          maxHeight: "100%",
+          objectFit: "contain"
+        }}
+        controls={false}
+        clickToPlaySelectsAutoPlay={false}
+        loop
+        onFrameUpdate={(e) => {
+          const newTime = e.detail.frame / project.fps;
+          if (isPlaying) {
+            setCurrentTime(newTime);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:22:57
+FILE PATH: src/components/editor/LeftPanel.tsx
+ACTION: Created
+================================================================================
+"use client";
+
+import type { AnimationName } from "@/lib/editor-schema";
+import { getStoredNvidiaKey } from "@/services/api-keys";
+import { useEditorStore } from "@/stores/editor-store";
+import { Download, Layers, Palette, Sparkles, Type, Wand2 } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+
+export function LeftPanel() {
+  const project = useEditorStore((s) => s.project);
+  const updateTextStyle = useEditorStore((s) => s.updateTextStyle);
+  const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
+  const setSegmentAnimation = useEditorStore((s) => s.setSegmentAnimation);
+  const setAllAnimations = useEditorStore((s) => s.setAllAnimations);
+
+  const [activeTab, setActiveTab] = useState<"style" | "animation" | "ai" | "export">("style");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+
+  if (!project) return null;
+
+  const style = project.textStyle;
+  const selectedSeg = project.segments.find((s) => s.id === selectedSegmentId);
+
+  const handleExportMp4 = async () => {
+    setIsExporting(true);
+    setExportProgress(0);
+
+    try {
+      const response = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project })
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.error || `Export request failed (HTTP ${response.status})`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No readable stream received from server export endpoint");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            if (event.type === "progress") {
+              setExportProgress(Math.round(event.progress * 100));
+            } else if (event.type === "done") {
+              setExportProgress(100);
+              toast.success("MP4 Video successfully rendered!");
+              
+              // Trigger file download
+              const link = document.createElement("a");
+              link.href = event.url;
+              link.download = `${project.title || "lyrical-video"}.mp4`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }
+          } catch {
+            // Ignore parse errors for partial chunks
+          }
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleRegenerateAiAnimations = async () => {
+    setIsGeneratingAi(true);
+    try {
+      const nvidiaKey = await getStoredNvidiaKey();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (nvidiaKey) headers["x-nvidia-key"] = nvidiaKey;
+
+      const res = await fetch("/api/nvidia/animations", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          segments: project.segments,
+          bpm: project.bpm || 120,
+          moodHint: "cinematic"
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "AI generation request failed");
+      }
+
+      const data = await res.json();
+      if (data.segments?.length) {
+        useEditorStore.setState((s) => {
+          if (!s.project) return s;
+          return {
+            ...s,
+            project: { ...s.project, segments: data.segments }
+          };
+        });
+        toast.success("AI motion graphics regenerated for all segments!");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "AI generation failed");
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
+
+  return (
+    <aside className="w-80 border-r border-zinc-800 bg-zinc-900 flex flex-col shrink-0">
+      {/* Tab Selectors */}
+      <div className="flex border-b border-zinc-800 bg-zinc-950 p-1">
+        <button
+          onClick={() => setActiveTab("style")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "style"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Type className="h-3.5 w-3.5" />
+          <span>Text</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("animation")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "animation"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span>Motion</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("ai")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "ai"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>AI</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("export")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "export"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Download className="h-3.5 w-3.5" />
+          <span>Export</span>
+        </button>
+      </div>
+
+      {/* Tab Panels */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        {activeTab === "style" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Type className="h-4 w-4 text-yellow-400" />
+              <span>Typography & Colors</span>
+            </h2>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">Font Family</label>
+              <select
+                value={style.fontFamily}
+                onChange={(e) => updateTextStyle({ fontFamily: e.target.value })}
+                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
+              >
+                <option value="Inter">Inter (Sans-Serif)</option>
+                <option value="Roboto">Roboto</option>
+                <option value="Impact">Impact (Bold Heavy)</option>
+                <option value="Montserrat">Montserrat</option>
+                <option value="Georgia">Georgia (Serif)</option>
+                <option value="Courier New">Courier New (Mono)</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Size ({style.fontSize}px)</label>
+                <input
+                  type="range"
+                  min="20"
+                  max="180"
+                  value={style.fontSize}
+                  onChange={(e) => updateTextStyle({ fontSize: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Weight ({style.fontWeight})</label>
+                <input
+                  type="range"
+                  min="300"
+                  max="900"
+                  step="100"
+                  value={style.fontWeight}
+                  onChange={(e) => updateTextStyle({ fontWeight: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Text Color</label>
+                <input
+                  type="color"
+                  value={style.color}
+                  onChange={(e) => updateTextStyle({ color: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Karaoke Highlight</label>
+                <input
+                  type="color"
+                  value={style.highlightColor}
+                  onChange={(e) => updateTextStyle({ highlightColor: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke Color</label>
+                <input
+                  type="color"
+                  value={style.outlineColor}
+                  onChange={(e) => updateTextStyle({ outlineColor: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke Width ({style.outlineWidth}px)</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="10"
+                  value={style.outlineWidth}
+                  onChange={(e) => updateTextStyle({ outlineWidth: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">Vertical Position ({style.positionY}%)</label>
+              <input
+                type="range"
+                min="10"
+                max="90"
+                value={style.positionY}
+                onChange={(e) => updateTextStyle({ positionY: Number(e.target.value) })}
+                className="w-full accent-yellow-400"
+              />
+            </div>
+          </div>
+        )}
+
+        {activeTab === "animation" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Layers className="h-4 w-4 text-yellow-400" />
+              <span>Motion Graphic Animations</span>
+            </h2>
+
+            {selectedSeg ? (
+              <div className="rounded-xl bg-zinc-950 p-3 border border-zinc-850 space-y-3">
+                <div className="text-xs font-semibold text-zinc-300">
+                  Editing Selected Segment: <span className="text-yellow-400 font-mono">"{selectedSeg.line}"</span>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Animation Type</label>
+                  <select
+                    value={selectedSeg.animation}
+                    onChange={(e) => setSegmentAnimation(selectedSeg.id, e.target.value as AnimationName)}
+                    className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
+                  >
+                    <option value="fade">Fade In/Out</option>
+                    <option value="slide_up">Slide Up</option>
+                    <option value="pop">Pop & Scale</option>
+                    <option value="neon_pulse">Neon Glow Pulse</option>
+                    <option value="zoom_blur">Zoom Blur</option>
+                    <option value="rain">Lyric Rain</option>
+                    <option value="shake">Camera Shake</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500">Select a line on the timeline to customize its specific animation.</p>
+            )}
+
+            <div className="pt-2">
+              <label className="block text-xs font-medium text-zinc-300 mb-2">Apply Animation to ALL Segments</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(["fade", "slide_up", "pop", "neon_pulse", "zoom_blur", "rain", "shake"] as AnimationName[]).map((anim) => (
+                  <button
+                    key={anim}
+                    onClick={() => setAllAnimations(anim)}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950 py-2 text-xs font-semibold text-zinc-300 hover:border-yellow-500/50 hover:text-yellow-400 transition-all capitalize"
+                  >
+                    {anim.replace("_", " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "ai" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-yellow-400" />
+              <span>NVIDIA NIM AI Assistant</span>
+            </h2>
+
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Use Llama 3.3 70B to analyze lyric context and assign dynamic motion graphic presets matching the song's energy.
+            </p>
+
+            <button
+              onClick={handleRegenerateAiAnimations}
+              disabled={isGeneratingAi}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-2.5 text-xs font-bold text-zinc-950 hover:brightness-110 disabled:opacity-50 transition-all shadow-md shadow-yellow-500/20"
+            >
+              <Wand2 className="h-4 w-4" />
+              <span>{isGeneratingAi ? "Generating AI Animations..." : "Auto-Assign AI Animations"}</span>
+            </button>
+          </div>
+        )}
+
+        {activeTab === "export" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Download className="h-4 w-4 text-yellow-400" />
+              <span>Export Production MP4</span>
+            </h2>
+
+            <div className="rounded-xl bg-zinc-950 p-4 border border-zinc-850 space-y-2 text-xs">
+              <div className="flex justify-between text-zinc-400">
+                <span>Resolution</span>
+                <span className="text-white font-mono">{project.width}x{project.height}</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Frame Rate</span>
+                <span className="text-white font-mono">{project.fps} FPS</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Duration</span>
+                <span className="text-white font-mono">{project.duration.toFixed(2)}s</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Codec</span>
+                <span className="text-white font-mono">H.264 / AAC</span>
+              </div>
+            </div>
+
+            {isExporting ? (
+              <div className="space-y-2 rounded-xl bg-zinc-950 p-4 border border-zinc-800">
+                <div className="flex justify-between text-xs font-semibold text-zinc-300">
+                  <span>Rendering MP4 video...</span>
+                  <span className="text-yellow-400">{exportProgress}%</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full bg-yellow-400 transition-all duration-300"
+                    style={{ width: `${exportProgress}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={handleExportMp4}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-3 text-xs font-bold text-zinc-950 hover:brightness-110 shadow-lg shadow-yellow-500/20"
+              >
+                <Download className="h-4 w-4" />
+                <span>Render & Download MP4</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 00:22:43
 FILE PATH: src/components/editor/EditorWorkspace.tsx
 ACTION: Created

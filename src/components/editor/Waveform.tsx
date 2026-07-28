@@ -1,157 +1,150 @@
 "use client";
 
-import {useEffect, useRef} from "react";
+import { useEditorStore } from "@/stores/editor-store";
+import { useEffect, useRef } from "react";
 
-type WaveformProps = {
-  audioUrl: string;
-  playhead: number;
-  duration: number;
-  beats?: number[];
-  onSeek: (time: number) => void;
-};
+export function Waveform() {
+  const project = useEditorStore((s) => s.project);
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
 
-export function Waveform({audioUrl, playhead, duration, beats = [], onSeek}: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const waveformData = useRef<Float32Array | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const waveformDataRef = useRef<Float32Array | null>(null);
 
-  // Decode audio and extract waveform data
+  // Decode audio data once into downsampled 2000 points
   useEffect(() => {
-    let cancelled = false;
+    if (!project?.audioUrl) return;
 
-    async function decode() {
+    let isCancelled = false;
+
+    async function loadAudioWaveform() {
       try {
-        const response = await fetch(audioUrl);
+        const response = await fetch(project!.audioUrl);
         const arrayBuffer = await response.arrayBuffer();
-        const context = new AudioContext();
-        const buffer = await context.decodeAudioData(arrayBuffer);
-        const channel = buffer.getChannelData(0);
 
-        // Downsample to ~2000 points for rendering
-        const targetPoints = 2000;
-        const step = Math.max(1, Math.floor(channel.length / targetPoints));
-        const sampled = new Float32Array(Math.ceil(channel.length / step));
+        const audioCtx = new AudioContext();
+        const buffer = await audioCtx.decodeAudioData(arrayBuffer);
+        const rawData = buffer.getChannelData(0);
 
-        for (let i = 0; i < sampled.length; i++) {
+        const samples = 1800;
+        const step = Math.floor(rawData.length / samples);
+        const downsampled = new Float32Array(samples);
+
+        for (let i = 0; i < samples; i++) {
           let max = 0;
           const start = i * step;
-          const end = Math.min(start + step, channel.length);
+          const end = Math.min(start + step, rawData.length);
           for (let j = start; j < end; j++) {
-            const abs = Math.abs(channel[j]);
-            if (abs > max) max = abs;
+            const val = Math.abs(rawData[j]);
+            if (val > max) max = val;
           }
-          sampled[i] = max;
+          downsampled[i] = max;
         }
 
-        if (!cancelled) {
-          waveformData.current = sampled;
+        if (!isCancelled) {
+          waveformDataRef.current = downsampled;
+          drawCanvas();
         }
 
-        await context.close();
-      } catch {
-        // Waveform display is non-critical
+        await audioCtx.close();
+      } catch (err) {
+        console.warn("Waveform decoding failed:", err);
       }
     }
 
-    decode();
-    return () => {
-      cancelled = true;
-    };
-  }, [audioUrl]);
+    loadAudioWaveform();
 
-  // Render waveform
-  useEffect(() => {
+    return () => {
+      isCancelled = true;
+    };
+  }, [project?.audioUrl]);
+
+  const drawCanvas = () => {
     const canvas = canvasRef.current;
-    const data = waveformData.current;
-    if (!canvas || !data) return;
+    if (!canvas || !project) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
+    const width = canvas.offsetWidth;
+    const height = canvas.offsetHeight;
+    canvas.width = width;
+    canvas.height = height;
 
-    const w = rect.width;
-    const h = rect.height;
-    const mid = h / 2;
+    ctx.clearRect(0, 0, width, height);
 
-    // Clear
-    ctx.clearRect(0, 0, w, h);
+    const duration = project.duration || 10;
+    const data = waveformDataRef.current;
 
-    // Draw waveform bars
-    const barWidth = Math.max(1, w / data.length);
+    // Draw baseline
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, height / 2);
+    ctx.lineTo(width, height / 2);
+    ctx.stroke();
 
-    for (let i = 0; i < data.length; i++) {
-      const x = (i / data.length) * w;
-      const barHeight = data[i] * mid * 0.85;
-      const progress = x / w;
-      const playedProgress = duration > 0 ? playhead / duration : 0;
-
-      if (progress <= playedProgress) {
-        ctx.fillStyle = "rgba(139, 92, 246, 0.8)";
-      } else {
-        ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
-      }
-
-      ctx.fillRect(x, mid - barHeight, barWidth - 0.5, barHeight * 2);
-    }
-
-    // Draw beat markers
-    if (beats.length > 0) {
-      ctx.strokeStyle = "rgba(6, 182, 212, 0.25)";
+    // Draw detected beat lines
+    if (project.beats?.length) {
+      ctx.strokeStyle = "rgba(234, 179, 8, 0.35)";
       ctx.lineWidth = 1;
-
-      for (const beat of beats) {
-        const x = (beat / duration) * w;
+      for (const beat of project.beats) {
+        const x = (beat / duration) * width;
         ctx.beginPath();
         ctx.moveTo(x, 0);
-        ctx.lineTo(x, h);
+        ctx.lineTo(x, height);
         ctx.stroke();
       }
     }
 
-    // Draw playhead
-    const playheadX = (playhead / Math.max(duration, 0.01)) * w;
-    ctx.strokeStyle = "#8b5cf6";
+    // Draw waveform bars
+    if (data && data.length) {
+      const barWidth = width / data.length;
+      for (let i = 0; i < data.length; i++) {
+        const x = i * barWidth;
+        const barHeight = data[i] * (height * 0.85);
+
+        const timeAtBar = (i / data.length) * duration;
+        if (timeAtBar <= currentTime) {
+          ctx.fillStyle = "#eab308"; // Active yellow
+        } else {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+        }
+
+        ctx.fillRect(x, (height - barHeight) / 2, Math.max(1, barWidth - 0.5), barHeight);
+      }
+    }
+
+    // Draw playhead vertical marker
+    const playheadX = (currentTime / duration) * width;
+    ctx.strokeStyle = "#eab308";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, h);
+    ctx.lineTo(playheadX, height);
     ctx.stroke();
+  };
 
-    // Playhead glow
-    const gradient = ctx.createRadialGradient(
-      playheadX, mid, 0,
-      playheadX, mid, 20
-    );
-    gradient.addColorStop(0, "rgba(139, 92, 246, 0.3)");
-    gradient.addColorStop(1, "rgba(139, 92, 246, 0)");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(playheadX - 20, 0, 40, h);
-  });
+  useEffect(() => {
+    drawCanvas();
+  }, [currentTime, project]);
 
-  function handleClick(e: React.MouseEvent) {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect || duration <= 0) return;
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !project) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const time = (clickX / rect.width) * project.duration;
+    setCurrentTime(time);
+  };
 
-    const x = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    onSeek(ratio * duration);
-  }
+  if (!project) return null;
 
   return (
-    <div
-      ref={containerRef}
-      className="relative h-full cursor-crosshair"
-      onClick={handleClick}
-    >
+    <div className="relative h-16 w-full shrink-0 bg-zinc-950 px-2 py-1">
       <canvas
         ref={canvasRef}
-        className="h-full w-full"
-        style={{display: "block"}}
+        onClick={handleCanvasClick}
+        className="h-full w-full cursor-pointer rounded-lg border border-zinc-850"
       />
     </div>
   );

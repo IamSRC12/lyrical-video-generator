@@ -1,101 +1,117 @@
-import type {AnimationName} from "@/lib/editor-schema";
+import type { AnimationName } from "@/lib/editor-schema";
+import { interpolate, spring, springOptions } from "remotion";
 
-type AnimationStyle = {
+export type AnimationStyle = {
   opacity: number;
   transform: string;
-  textShadow?: string;
   filter?: string;
 };
 
-function clamp(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
+export function getAnimationStyle(options: {
+  animation: AnimationName;
+  frame: number;
+  fps: number;
+  segmentStartFrame: number;
+  segmentEndFrame: number;
+  intensity?: number;
+}): AnimationStyle {
+  const {
+    animation,
+    frame,
+    fps,
+    segmentStartFrame,
+    segmentEndFrame,
+    intensity = 1.0
+  } = options;
 
-function easeOutCubic(value: number) {
-  const t = clamp(value);
-  return 1 - Math.pow(1 - t, 3);
-}
+  const localFrame = frame - segmentStartFrame;
+  const durationFrames = Math.max(1, segmentEndFrame - segmentStartFrame);
 
-function easeOutBack(value: number) {
-  const t = clamp(value);
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
+  // Entrance & Exit progress (0 to 1)
+  const fadeInProgress = interpolate(localFrame, [0, Math.min(10, durationFrames / 3)], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp"
+  });
 
-  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-}
+  const fadeOutProgress = interpolate(
+    frame,
+    [segmentEndFrame - Math.min(10, durationFrames / 3), segmentEndFrame],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
 
-export function getAnimationStyle(
-  animation: AnimationName,
-  progress: number
-): AnimationStyle {
-  const t = clamp(progress);
-  const smooth = easeOutCubic(t);
+  const opacity = fadeInProgress * fadeOutProgress;
 
   switch (animation) {
-    case "fade":
+    case "fade": {
       return {
-        opacity: smooth,
-        transform: `translateY(${(1 - smooth) * 18}px)`
+        opacity,
+        transform: "none"
       };
+    }
 
-    case "slide_up":
+    case "slide_up": {
+      const translateY = interpolate(fadeInProgress, [0, 1], [60 * intensity, 0], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp"
+      });
       return {
-        opacity: clamp(t * 1.8),
-        transform: `translate3d(0, ${(1 - smooth) * 90}px, 0)`
+        opacity,
+        transform: `translateY(${translateY}px)`
       };
+    }
 
     case "pop": {
-      const scale = 0.55 + easeOutBack(t) * 0.45;
-
+      const springVal = spring({
+        frame: localFrame,
+        fps,
+        config: { damping: 12, stiffness: 200 }
+      });
+      const scale = interpolate(springVal, [0, 1], [0.5, 1.0 * intensity]);
       return {
-        opacity: clamp(t * 2.5),
+        opacity,
         transform: `scale(${scale})`
       };
     }
 
     case "neon_pulse": {
-      const pulse = 0.5 + Math.sin(t * Math.PI * 5) * 0.5;
-      const glow = 14 + pulse * 20;
-
+      const pulse = Math.sin(localFrame * 0.2) * 0.15 * intensity + 1.0;
+      const glowBlur = Math.abs(Math.sin(localFrame * 0.15)) * 25 * intensity;
       return {
-        opacity: clamp(t * 2),
-        transform: `scale(${0.96 + smooth * 0.04 + pulse * 0.015})`,
-        textShadow: [
-          `0 0 ${glow}px rgba(139,92,246,.95)`,
-          `0 0 ${glow * 1.8}px rgba(217,70,239,.55)`,
-          `0 8px 28px rgba(0,0,0,.65)`
-        ].join(",")
+        opacity,
+        transform: `scale(${pulse})`,
+        filter: `drop-shadow(0 0 ${glowBlur}px rgba(253, 224, 71, 0.8))`
       };
     }
 
-    case "zoom_blur":
+    case "zoom_blur": {
+      const scale = interpolate(fadeInProgress, [0, 1], [1.6 * intensity, 1.0]);
+      const blur = interpolate(fadeInProgress, [0, 1], [12 * intensity, 0]);
       return {
-        opacity: clamp(t * 2),
-        transform: `scale(${1.3 - smooth * 0.3})`,
-        filter: `blur(${(1 - smooth) * 14}px)`
+        opacity,
+        transform: `scale(${scale})`,
+        filter: blur > 0.5 ? `blur(${blur}px)` : undefined
       };
+    }
 
-    case "rain":
+    case "rain": {
+      const translateY = interpolate(localFrame, [0, durationFrames], [-40 * intensity, 40 * intensity]);
       return {
-        opacity: clamp(t * 1.8),
-        transform: `translate3d(0, ${(-1 + smooth) * 100}px, 0)`
+        opacity,
+        transform: `translateY(${translateY}px)`
       };
+    }
 
     case "shake": {
-      const decay = 1 - t;
-      const x = Math.sin(t * Math.PI * 14) * 14 * decay;
-      const rotation = Math.sin(t * Math.PI * 10) * 1.5 * decay;
-
+      const shakeX = Math.sin(localFrame * 0.8) * 8 * intensity;
+      const shakeY = Math.cos(localFrame * 0.6) * 6 * intensity;
       return {
-        opacity: clamp(t * 2.5),
-        transform: `translateX(${x}px) rotate(${rotation}deg)`
+        opacity,
+        transform: `translate(${shakeX}px, ${shakeY}px)`
       };
     }
 
     default:
-      return {
-        opacity: 1,
-        transform: "none"
-      };
+      return { opacity, transform: "none" };
   }
 }
