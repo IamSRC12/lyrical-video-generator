@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import {getActiveSegment, getHighlightedWordIndex} from "@/lib/caption-timing";
 import {getAnimationStyle} from "@/remotion/animations";
+import {getBeatPulse} from "@/lib/beat-sync";
 import {uploadAsset} from "@/services/asset-client";
 import {toast} from "sonner";
 import {cn} from "@/lib/cn";
@@ -35,6 +36,7 @@ export function PreviewCanvas() {
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number | null>(null);
   const jumpInputRef = useRef<HTMLInputElement>(null);
+  const internalTimeUpdateRef = useRef(false);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPlayingReverse, setIsPlayingReverse] = useState(false);
@@ -45,14 +47,27 @@ export function PreviewCanvas() {
   const [showJumpInput, setShowJumpInput] = useState(false);
   const [jumpInputValue, setJumpInputValue] = useState("");
 
-  // Sync audio currentTime when playhead is updated from outside while paused
+  // Sync audio currentTime when playhead updates
   useEffect(() => {
-    if (audioRef.current && !isPlaying && !isPlayingReverse) {
-      if (Math.abs(audioRef.current.currentTime - playhead) > 0.1) {
-        audioRef.current.currentTime = playhead;
-      }
+    const audio = audioRef.current;
+    if (!audio || !project || internalTimeUpdateRef.current) return;
+
+    if (Math.abs(audio.currentTime - playhead) > 0.15) {
+      audio.currentTime = Math.max(
+        0,
+        Math.min(playhead, audio.duration || project.duration)
+      );
     }
-  }, [playhead, isPlaying, isPlayingReverse]);
+  }, [playhead, project]);
+
+  // Clean up RAF loop on unmount
+  useEffect(() => {
+    return () => {
+      if (animationRef.current !== null) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, []);
 
   // Focus jump input when toggled open
   useEffect(() => {
@@ -142,11 +157,17 @@ export function PreviewCanvas() {
 
   const style = project.textStyle;
 
+  const beatPulse = project.toggles.beatSync
+    ? getBeatPulse(project.beats, playhead)
+    : 0;
+
+  const beatScale = 1 + beatPulse * 0.045;
+
   function stopAllPlayback() {
     if (audioRef.current) {
       audioRef.current.pause();
     }
-    if (animationRef.current) {
+    if (animationRef.current !== null) {
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
     }
@@ -155,25 +176,50 @@ export function PreviewCanvas() {
     lastTimeRef.current = null;
   }
 
-  function togglePlay() {
+  function tick() {
+    const audio = audioRef.current;
+
+    if (!audio || audio.paused || audio.ended) {
+      animationRef.current = null;
+      return;
+    }
+
+    internalTimeUpdateRef.current = true;
+    setPlayhead(audio.currentTime);
+
+    queueMicrotask(() => {
+      internalTimeUpdateRef.current = false;
+    });
+
+    animationRef.current = requestAnimationFrame(tick);
+  }
+
+  async function togglePlay() {
     const audio = audioRef.current;
     if (!audio) return;
 
-    if (isPlaying) {
-      stopAllPlayback();
-    } else {
-      stopAllPlayback();
-      audio.currentTime = playhead;
-      audio.play();
-      setIsPlaying(true);
+    if (!audio.paused) {
+      audio.pause();
+      setIsPlaying(false);
 
-      function tick() {
-        if (audioRef.current && !audioRef.current.paused) {
-          setPlayhead(audioRef.current.currentTime);
-          animationRef.current = requestAnimationFrame(tick);
-        }
+      if (animationRef.current !== null) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
       }
-      tick();
+      return;
+    }
+
+    audio.currentTime = Math.max(
+      0,
+      Math.min(playhead, audio.duration || project.duration)
+    );
+
+    try {
+      await audio.play();
+      setIsPlaying(true);
+      animationRef.current = requestAnimationFrame(tick);
+    } catch {
+      setIsPlaying(false);
     }
   }
 
@@ -322,7 +368,7 @@ export function PreviewCanvas() {
             style={{
               left: `${style.positionX}%`,
               top: `${style.positionY}%`,
-              transform: `translate(-50%, -50%) ${animationStyle?.transform ?? ""}`,
+              transform: `translate(-50%, -50%) scale(${beatScale}) ${animationStyle?.transform ?? ""}`,
               opacity: animationStyle?.opacity ?? 1,
               filter: animationStyle?.filter,
               textAlign: style.align,
@@ -343,7 +389,12 @@ export function PreviewCanvas() {
                 letterSpacing: `${style.letterSpacing * 0.5}px`,
                 textTransform: style.textTransform,
                 color: style.color,
-                textShadow: animationStyle?.textShadow ?? style.shadow,
+                textShadow:
+                  beatPulse > 0
+                    ? `${style.shadow}, 0 0 ${18 + beatPulse * 30}px ${
+                        style.highlightColor
+                      }`
+                    : animationStyle?.textShadow ?? style.shadow,
                 WebkitTextStroke: `${style.outlineWidth * 0.5}px ${style.outlineColor}`,
                 margin: 0
               }}
@@ -506,13 +557,21 @@ export function PreviewCanvas() {
         </div>
       </div>
 
-      {/* Hidden audio element */}
+      {/* Audio element */}
       <audio
         ref={audioRef}
         src={project.audioUrl}
         preload="auto"
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
         onEnded={() => {
-          stopAllPlayback();
+          setIsPlaying(false);
+          setPlayhead(project.duration);
+
+          if (animationRef.current !== null) {
+            cancelAnimationFrame(animationRef.current);
+            animationRef.current = null;
+          }
         }}
       />
     </div>

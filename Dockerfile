@@ -1,34 +1,45 @@
-FROM node:22-slim
+FROM node:22-bookworm-slim
 
-# Install Chrome dependencies for Remotion
 RUN apt-get update && apt-get install -y \
-    chromium \
+    ca-certificates \
+    libnss3 \
+    libdbus-1-3 \
+    libatk1.0-0 \
+    libgbm-dev \
+    libasound2 \
+    libxrandr2 \
+    libxkbcommon-dev \
+    libxfixes3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libatk-bridge2.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libcups2 \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-ENV CHROMIUM_PATH=/usr/bin/chromium
-ENV RENDER_CONCURRENCY=50%
-
-# Install dependencies
 COPY package.json package-lock.json* ./
 RUN npm ci --production=false
 
-# Copy source
+# Download the Remotion-pinned browser during image build.
+RUN npx remotion browser ensure
+
 COPY . .
 
-# Build Remotion bundle and Next.js
 RUN npm run build
 
-# Create data directories
-RUN mkdir -p data/assets data/renders
-
-EXPOSE 3000
+RUN mkdir -p /app/data/assets /app/data/renders
 
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV RENDER_BASE_URL=http://127.0.0.1:3000
+ENV RENDER_CONCURRENCY=25%
+
+EXPOSE 3000
 
 CMD ["npm", "start"]
