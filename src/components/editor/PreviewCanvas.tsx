@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import {getActiveSegment, getHighlightedWordIndex} from "@/lib/caption-timing";
 import {getAnimationStyle} from "@/remotion/animations";
-import {getBeatPulse} from "@/lib/beat-sync";
+import {getRhythmPulse} from "@/lib/beat-sync";
 import {uploadAsset} from "@/services/asset-client";
 import {toast} from "sonner";
 import {cn} from "@/lib/cn";
