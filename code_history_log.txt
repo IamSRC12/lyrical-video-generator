@@ -1,4 +1,920 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 01:08:10
+FILE PATH: src/components/editor/LeftPanel.tsx
+ACTION: Modified
+================================================================================
+"use client";
+
+import type { AnimationMode, AnimationName } from "@/lib/editor-schema";
+import { getStoredOpencodeKey } from "@/services/api-keys";
+import { useEditorStore } from "@/stores/editor-store";
+import { Download, Layers, Sparkles, Type, Wand2, ToggleLeft, ToggleRight } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+
+export function LeftPanel() {
+  const project = useEditorStore((s) => s.project);
+  const updateTextStyle = useEditorStore((s) => s.updateTextStyle);
+  const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
+  const setSegmentAnimation = useEditorStore((s) => s.setSegmentAnimation);
+  const setSegmentAnimationMode = useEditorStore((s) => s.setSegmentAnimationMode);
+  const setAllAnimations = useEditorStore((s) => s.setAllAnimations);
+  const setKaraokeEnabled = useEditorStore((s) => s.setKaraokeEnabled);
+  const setSegmentKaraokeOverride = useEditorStore((s) => s.setSegmentKaraokeOverride);
+
+  const [activeTab, setActiveTab] = useState<"style" | "animation" | "ai" | "export">("style");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+
+  if (!project) return null;
+
+  const style = project.textStyle;
+  const selectedSeg = project.segments.find((s) => s.id === selectedSegmentId);
+
+  const handleExportMp4 = async () => {
+    setIsExporting(true);
+    setExportProgress(0.05);
+
+    try {
+      const response = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project })
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.error || `Export request failed (HTTP ${response.status})`);
+      }
+
+      const { jobId } = await response.json();
+      toast.info("Export job queued. Processing 60 FPS video server-side...");
+
+      // Poll export job status until completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/export/${jobId}`);
+          if (!statusRes.ok) return;
+
+          const jobData = await statusRes.json();
+          setExportProgress(Math.round(jobData.progress * 100));
+
+          if (jobData.status === "completed") {
+            clearInterval(pollInterval);
+            setIsExporting(false);
+            setExportProgress(100);
+            toast.success("MP4 Video successfully rendered!");
+
+            if (jobData.downloadUrl) {
+              const link = document.createElement("a");
+              link.href = jobData.downloadUrl;
+              link.download = `${project.title || "lyrical-video"}.mp4`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }
+          } else if (jobData.status === "failed") {
+            clearInterval(pollInterval);
+            setIsExporting(false);
+            toast.error(`Export failed: ${jobData.error || "Unknown render error"}`);
+          }
+        } catch (pollErr) {
+          console.warn("Export polling error:", pollErr);
+        }
+      }, 1500);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed");
+      setIsExporting(false);
+    }
+  };
+
+  const handleRegenerateDeepSeekAnimations = async () => {
+    setIsGeneratingAi(true);
+    const requestId = crypto.randomUUID();
+    useEditorStore.getState().beginGeneration(requestId);
+
+    try {
+      const opencodeKey = await getStoredOpencodeKey();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (opencodeKey) headers["x-opencode-key"] = opencodeKey;
+
+      const res = await fetch("/api/opencode/animations", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          segments: project.segments,
+          bpm: project.bpm || 120,
+          moodHint: "expressive",
+          requestId
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "AI generation request failed");
+      }
+
+      const data = await res.json();
+      if (data.suggestions?.length) {
+        useEditorStore.getState().applyAnimationSuggestions(requestId, data.suggestions);
+        toast.success("DeepSeek V4 Flash motion graphics generated!");
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "AI generation failed";
+      useEditorStore.getState().failGeneration(requestId, msg);
+      toast.error(msg);
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
+
+  return (
+    <aside className="w-80 border-r border-zinc-800 bg-zinc-900 flex flex-col shrink-0">
+      {/* Tab Selectors */}
+      <div className="flex border-b border-zinc-800 bg-zinc-950 p-1">
+        <button
+          onClick={() => setActiveTab("style")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "style"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Type className="h-3.5 w-3.5" />
+          <span>Text</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("animation")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "animation"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span>Motion</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("ai")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "ai"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>AI</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("export")}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
+            activeTab === "export"
+              ? "bg-zinc-800 text-yellow-400 border border-zinc-700"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          <Download className="h-3.5 w-3.5" />
+          <span>Export</span>
+        </button>
+      </div>
+
+      {/* Tab Panels */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        {activeTab === "style" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Type className="h-4 w-4 text-yellow-400" />
+              <span>Typography & Karaoke</span>
+            </h2>
+
+            {/* Project Global Karaoke Toggle */}
+            <div className="flex items-center justify-between rounded-xl bg-zinc-950 p-3 border border-zinc-850">
+              <div>
+                <div className="text-xs font-semibold text-zinc-200">Karaoke Word Highlighting</div>
+                <div className="text-[11px] text-zinc-400">Global project toggle</div>
+              </div>
+              <button
+                onClick={() => setKaraokeEnabled(!project.karaokeEnabled)}
+                className="text-yellow-400 hover:scale-105 transition-transform"
+              >
+                {project.karaokeEnabled ? <ToggleRight className="h-6 w-6" /> : <ToggleLeft className="h-6 w-6 text-zinc-600" />}
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">Font Family</label>
+              <select
+                value={style.fontFamily}
+                onChange={(e) => updateTextStyle({ fontFamily: e.target.value })}
+                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
+              >
+                <option value="Inter">Inter (Sans-Serif)</option>
+                <option value="Roboto">Roboto</option>
+                <option value="Impact">Impact (Bold Heavy)</option>
+                <option value="Montserrat">Montserrat</option>
+                <option value="Georgia">Georgia (Serif)</option>
+                <option value="Courier New">Courier New (Mono)</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Size ({style.fontSize}px)</label>
+                <input
+                  type="range"
+                  min="20"
+                  max="180"
+                  value={style.fontSize}
+                  onChange={(e) => updateTextStyle({ fontSize: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Weight ({style.fontWeight})</label>
+                <input
+                  type="range"
+                  min="300"
+                  max="900"
+                  step="100"
+                  value={style.fontWeight}
+                  onChange={(e) => updateTextStyle({ fontWeight: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Text Color</label>
+                <input
+                  type="color"
+                  value={style.color}
+                  onChange={(e) => updateTextStyle({ color: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Highlight Color</label>
+                <input
+                  type="color"
+                  value={style.highlightColor}
+                  onChange={(e) => updateTextStyle({ highlightColor: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke Color</label>
+                <input
+                  type="color"
+                  value={style.outlineColor}
+                  onChange={(e) => updateTextStyle({ outlineColor: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded bg-zinc-950 border border-zinc-800 p-1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke ({style.outlineWidth}px)</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="10"
+                  value={style.outlineWidth}
+                  onChange={(e) => updateTextStyle({ outlineWidth: Number(e.target.value) })}
+                  className="w-full accent-yellow-400"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-300 mb-1">Vertical Position ({style.positionY}%)</label>
+              <input
+                type="range"
+                min="10"
+                max="90"
+                value={style.positionY}
+                onChange={(e) => updateTextStyle({ positionY: Number(e.target.value) })}
+                className="w-full accent-yellow-400"
+              />
+            </div>
+          </div>
+        )}
+
+        {activeTab === "animation" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Layers className="h-4 w-4 text-yellow-400" />
+              <span>Motion Graphic Animations</span>
+            </h2>
+
+            {selectedSeg ? (
+              <div className="rounded-xl bg-zinc-950 p-3 border border-zinc-850 space-y-3">
+                <div className="text-xs font-semibold text-zinc-300">
+                  Selected Line: <span className="text-yellow-400 font-mono">"{selectedSeg.text}"</span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-400">Karaoke Override</span>
+                  <button
+                    onClick={() =>
+                      setSegmentKaraokeOverride(
+                        selectedSeg.id,
+                        selectedSeg.karaokeOverride === undefined ? false : !selectedSeg.karaokeOverride
+                      )
+                    }
+                    className="text-yellow-400"
+                  >
+                    {selectedSeg.karaokeOverride ?? project.karaokeEnabled ? "Enabled" : "Disabled"}
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Animation Mode</label>
+                  <select
+                    value={selectedSeg.animationMode}
+                    onChange={(e) => setSegmentAnimationMode(selectedSeg.id, e.target.value as AnimationMode)}
+                    className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
+                  >
+                    <option value="auto">Auto (Deterministic)</option>
+                    <option value="ai">AI (DeepSeek V4 Flash)</option>
+                    <option value="manual">Manual Override</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Animation Preset</label>
+                  <select
+                    value={selectedSeg.animation}
+                    onChange={(e) => setSegmentAnimation(selectedSeg.id, e.target.value as AnimationName)}
+                    className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
+                  >
+                    <option value="none">None</option>
+                    <option value="fade">Fade In/Out</option>
+                    <option value="slide_up">Slide Up</option>
+                    <option value="pop">Pop & Scale</option>
+                    <option value="neon_pulse">Neon Glow Pulse</option>
+                    <option value="zoom_blur">Zoom Blur</option>
+                    <option value="rain">Lyric Rain</option>
+                    <option value="shake">Camera Shake</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500">Select a line on the timeline to customize its specific animation.</p>
+            )}
+
+            <div className="pt-2">
+              <label className="block text-xs font-medium text-zinc-300 mb-2">Apply Preset to ALL Lines</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(["none", "fade", "slide_up", "pop", "neon_pulse", "zoom_blur", "rain", "shake"] as AnimationName[]).map((anim) => (
+                  <button
+                    key={anim}
+                    onClick={() => setAllAnimations(anim)}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950 py-2 text-xs font-semibold text-zinc-300 hover:border-yellow-500/50 hover:text-yellow-400 transition-all capitalize"
+                  >
+                    {anim.replace("_", " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "ai" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-yellow-400" />
+              <span>DeepSeek V4 Flash Assistant</span>
+            </h2>
+
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Query DeepSeek V4 Flash via OpenCode adapter to assign restrained, context-aware motion graphic presets.
+            </p>
+
+            <button
+              onClick={handleRegenerateDeepSeekAnimations}
+              disabled={isGeneratingAi}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-2.5 text-xs font-bold text-zinc-950 hover:brightness-110 disabled:opacity-50 transition-all shadow-md shadow-yellow-500/20"
+            >
+              <Wand2 className="h-4 w-4" />
+              <span>{isGeneratingAi ? "Generating AI Animations..." : "Generate AI Animations"}</span>
+            </button>
+          </div>
+        )}
+
+        {activeTab === "export" && (
+          <div className="space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <Download className="h-4 w-4 text-yellow-400" />
+              <span>Async 60 FPS Video Export</span>
+            </h2>
+
+            <div className="rounded-xl bg-zinc-950 p-4 border border-zinc-850 space-y-2 text-xs">
+              <div className="flex justify-between text-zinc-400">
+                <span>Resolution</span>
+                <span className="text-white font-mono">{project.width}x{project.height}</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Frame Rate</span>
+                <span className="text-yellow-400 font-mono">60 FPS</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Duration</span>
+                <span className="text-white font-mono">{project.duration.toFixed(2)}s</span>
+              </div>
+              <div className="flex justify-between text-zinc-400">
+                <span>Codec</span>
+                <span className="text-white font-mono">H.264 / MP4</span>
+              </div>
+            </div>
+
+            {isExporting ? (
+              <div className="space-y-2 rounded-xl bg-zinc-950 p-4 border border-zinc-800">
+                <div className="flex justify-between text-xs font-semibold text-zinc-300">
+                  <span>Rendering 60 FPS MP4 video...</span>
+                  <span className="text-yellow-400">{exportProgress}%</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full bg-yellow-400 transition-all duration-300"
+                    style={{ width: `${exportProgress}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={handleExportMp4}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-3 text-xs font-bold text-zinc-950 hover:brightness-110 shadow-lg shadow-yellow-500/20"
+              >
+                <Download className="h-4 w-4" />
+                <span>Start Async 60 FPS Export</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:07:56
+FILE PATH: src/components/editor/EditorWorkspace.tsx
+ACTION: Modified
+================================================================================
+"use client";
+
+import { useEditorStore } from "@/stores/editor-store";
+import { ArrowLeft, Play, Pause, RotateCcw, RotateCw, Volume2 } from "lucide-react";
+import { LeftPanel } from "./LeftPanel";
+import { PreviewCanvas } from "./PreviewCanvas";
+import { Timeline } from "./Timeline";
+import { Waveform } from "./Waveform";
+
+export function EditorWorkspace() {
+  const project = useEditorStore((s) => s.project);
+  const setProject = useEditorStore((s) => s.setProject);
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const isPlaying = useEditorStore((s) => s.isPlaying);
+  const togglePlay = useEditorStore((s) => s.togglePlay);
+  const undo = useEditorStore((s) => s.undo);
+  const redo = useEditorStore((s) => s.redo);
+
+  if (!project) return null;
+
+  return (
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100 select-none">
+      {/* Top Navigation Bar */}
+      <header className="flex h-14 w-full shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-900/90 px-4 backdrop-blur-md">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setProject(null as any)}
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-zinc-400 hover:border-zinc-700 hover:text-white"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>New Project</span>
+          </button>
+          <span className="h-4 w-px bg-zinc-800" />
+          <h1 className="text-sm font-bold text-white truncate max-w-xs">{project.title}</h1>
+        </div>
+
+        {/* Global Playback & History Controls */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={undo}
+              title="Undo"
+              className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+            >
+              <RotateCcw className="h-4 w-4" />
+            </button>
+            <button
+              onClick={redo}
+              title="Redo"
+              className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+            >
+              <RotateCw className="h-4 w-4" />
+            </button>
+          </div>
+
+          <button
+            onClick={togglePlay}
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-1.5 text-xs font-bold text-zinc-950 shadow-md shadow-yellow-500/20 hover:brightness-110"
+          >
+            {isPlaying ? <Pause className="h-4 w-4 fill-zinc-950" /> : <Play className="h-4 w-4 fill-zinc-950" />}
+            <span>{isPlaying ? "Pause" : "Play"}</span>
+          </button>
+
+          <div className="flex items-center gap-2 rounded-lg bg-zinc-950 px-3 py-1 font-mono text-xs text-yellow-400 border border-zinc-850">
+            <span>{currentTime.toFixed(2)}s</span>
+            <span className="text-zinc-600">/</span>
+            <span className="text-zinc-400">{project.duration.toFixed(2)}s</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-zinc-400">
+          <Volume2 className="h-4 w-4 text-zinc-500" />
+          <span>{project.fps} FPS</span>
+        </div>
+      </header>
+
+      {/* Main Workspace Layout */}
+      <div className="flex flex-1 overflow-hidden">
+        <LeftPanel />
+
+        <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950">
+          <div className="flex-1 overflow-hidden p-4 flex items-center justify-center bg-zinc-950/80">
+            <PreviewCanvas />
+          </div>
+
+          <div className="h-72 border-t border-zinc-800 bg-zinc-900/50 flex flex-col shrink-0">
+            <Waveform />
+            <Timeline />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:07:45
+FILE PATH: src/components/UploadAndAlign.tsx
+ACTION: Modified
+================================================================================
+"use client";
+
+import { defaultTextStyle, type EditorProject, type LyricSegment } from "@/lib/editor-schema";
+import { getStoredGroqKey, getStoredOpencodeKey } from "@/services/api-keys";
+import { useEditorStore } from "@/stores/editor-store";
+import { Activity, Key, Music, Sparkles, Upload, Wand2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
+import { ApiKeyOnboarding } from "./ApiKeyOnboarding";
+
+type ProcessingStage =
+  | "idle"
+  | "uploading"
+  | "transcribing"
+  | "aligning"
+  | "beat_detection"
+  | "ai_animation"
+  | "ready";
+
+export function UploadAndAlign() {
+  const setProject = useEditorStore((s) => s.setProject);
+
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [lyricsText, setLyricsText] = useState("");
+  const [stage, setStage] = useState<ProcessingStage>("idle");
+  const [stageProgress, setStageProgress] = useState(0);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("audio/") && !file.name.match(/\.(mp3|wav|m4a|aac|ogg)$/i)) {
+      toast.error("Please upload a valid audio file (MP3, WAV, M4A, AAC, OGG).");
+      return;
+    }
+
+    if (file.size > 50 * 1024 * 1024) {
+      toast.error("Audio file size must not exceed 50MB.");
+      return;
+    }
+
+    setAudioFile(file);
+    toast.success(`Loaded "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB)`);
+  };
+
+  const handleProcess = async () => {
+    if (!audioFile) {
+      toast.error("Please select an audio file.");
+      return;
+    }
+    if (!lyricsText.trim()) {
+      toast.error("Please enter or paste the song lyrics.");
+      return;
+    }
+    if (stage !== "idle" && stage !== "ready") return;
+
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    try {
+      setStage("uploading");
+      setStageProgress(15);
+
+      const assetFormData = new FormData();
+      assetFormData.append("file", audioFile);
+
+      const uploadRes = await fetch("/api/assets", {
+        method: "POST",
+        body: assetFormData,
+        signal
+      });
+
+      if (!uploadRes.ok) {
+        const errJson = await uploadRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `Upload failed (HTTP ${uploadRes.status})`);
+      }
+
+      const assetData = await uploadRes.json();
+      const audioAssetId = assetData.id;
+      const audioUrl = assetData.url;
+
+      const groqKey = await getStoredGroqKey();
+      const opencodeKey = await getStoredOpencodeKey();
+
+      setStage("transcribing");
+      setStageProgress(35);
+
+      const transFormData = new FormData();
+      transFormData.append("file", audioFile);
+      transFormData.append("lyrics", lyricsText);
+
+      const headers: Record<string, string> = {};
+      if (groqKey) headers["x-groq-key"] = groqKey;
+
+      const transRes = await fetch("/api/transcription", {
+        method: "POST",
+        headers,
+        body: transFormData,
+        signal
+      });
+
+      if (!transRes.ok) {
+        const errJson = await transRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `Transcription failed (HTTP ${transRes.status})`);
+      }
+
+      setStage("aligning");
+      setStageProgress(65);
+
+      const transData = await transRes.json();
+      let segments: LyricSegment[] = transData.segments;
+      const duration = transData.duration || 120;
+
+      setStage("beat_detection");
+      setStageProgress(80);
+
+      let beats: number[] = [];
+      let bpm = 120;
+
+      try {
+        const audioCtx = new AudioContext();
+        const arrayBuffer = await audioFile.arrayBuffer();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+        const { detectBeats } = await import("@/lib/beat-detection");
+        const beatResult = await detectBeats(audioBuffer);
+        beats = beatResult.beats;
+        bpm = beatResult.bpm;
+
+        await audioCtx.close();
+      } catch (err) {
+        console.warn("Client beat detection skipped:", err);
+      }
+
+      if (opencodeKey || process.env.NEXT_PUBLIC_ENABLE_AI !== "false") {
+        setStage("ai_animation");
+        setStageProgress(90);
+
+        try {
+          const aiHeaders: Record<string, string> = { "Content-Type": "application/json" };
+          if (opencodeKey) aiHeaders["x-opencode-key"] = opencodeKey;
+
+          const aiRes = await fetch("/api/opencode/animations", {
+            method: "POST",
+            headers: aiHeaders,
+            body: JSON.stringify({ segments, bpm, moodHint: "expressive" }),
+            signal
+          });
+
+          if (aiRes.ok) {
+            const aiData = await aiRes.json();
+            if (aiData.suggestions?.length) {
+              const sugMap = new Map(aiData.suggestions.map((s: any) => [s.segmentId, s]));
+              segments = segments.map((seg) => {
+                const sug = sugMap.get(seg.id);
+                if (sug) {
+                  return {
+                    ...seg,
+                    animationMode: "ai",
+                    animation: sug.animation,
+                    animationIntensity: sug.intensity ?? 1.0
+                  };
+                }
+                return seg;
+              });
+            }
+          }
+        } catch (err) {
+          console.warn("DeepSeek AI animation generation skipped:", err);
+        }
+      }
+
+      setStage("ready");
+      setStageProgress(100);
+
+      const newProject: EditorProject = {
+        version: 2,
+        id: crypto.randomUUID(),
+        title: audioFile.name.replace(/\.[^/.]+$/, ""),
+        fps: 60,
+        width: 1920,
+        height: 1080,
+        duration: Math.max(duration, segments[segments.length - 1]?.end || 0),
+        audioAssetId,
+        audioUrl,
+        backgroundColor: "#090d16",
+        karaokeEnabled: true,
+        beatSyncEnabled: false,
+        segments,
+        beats,
+        bpm,
+        textStyle: defaultTextStyle
+      };
+
+      setProject(newProject);
+      toast.success("Project generated with 60 FPS timing! Ready to edit.");
+    } catch (error) {
+      if (signal.aborted) {
+        toast.info("Processing cancelled.");
+      } else {
+        const msg = error instanceof Error ? error.message : "Processing failed";
+        toast.error(msg);
+      }
+      setStage("idle");
+    } font-normal {
+      abortControllerRef.current = null;
+    }
+  };
+
+  const getStageLabel = () => {
+    switch (stage) {
+      case "uploading": return "Uploading audio asset...";
+      case "transcribing": return "Transcribing with Groq Whisper v3...";
+      case "aligning": return "Performing global DP fuzzy alignment...";
+      case "beat_detection": return "Analyzing audio beats & BPM...";
+      case "ai_animation": return "Generating AI animations via DeepSeek V4 Flash...";
+      case "ready": return "Finalizing 60 FPS project...";
+      default: return "";
+    }
+  };
+
+  return (
+    <div className="mx-auto w-full max-w-4xl px-4 py-8">
+      <ApiKeyOnboarding
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+      />
+
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
+            <span>AI Lyrical Video Studio</span>
+            <span className="rounded-full bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-400 border border-yellow-500/20">
+              Pro 60 FPS
+            </span>
+          </h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Synchronize song audio with lyrics, detect beats, and generate motion graphics.
+          </p>
+        </div>
+
+        <button
+          onClick={() => setIsApiKeyModalOpen(true)}
+          className="flex items-center gap-2 rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-300 hover:border-yellow-500/50 hover:text-white transition-all shadow-md"
+        >
+          <Key className="h-4 w-4 text-yellow-400" />
+          <span>API Key Settings</span>
+        </button>
+      </div>
+
+      <div className="space-y-6 rounded-2xl bg-zinc-900/70 border border-zinc-800/80 p-8 shadow-2xl backdrop-blur-xl">
+        <div>
+          <label className="block text-xs font-bold uppercase tracking-wider text-zinc-300 mb-2 flex items-center gap-2">
+            <Music className="h-4 w-4 text-yellow-400" />
+            <span>1. Upload Song Audio</span>
+          </label>
+          <div className="relative group rounded-xl border-2 border-dashed border-zinc-800 bg-zinc-950/60 hover:border-yellow-500/50 p-6 text-center transition-all">
+            <input
+              type="file"
+              accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
+              onChange={handleFileChange}
+              className="absolute inset-0 cursor-pointer opacity-0 z-10"
+            />
+            <div className="flex flex-col items-center justify-center space-y-2">
+              <div className="rounded-full bg-yellow-500/10 p-3 text-yellow-400 group-hover:scale-110 transition-transform">
+                <Upload className="h-6 w-6" />
+              </div>
+              {audioFile ? (
+                <div>
+                  <p className="text-sm font-semibold text-white">{audioFile.name}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {(audioFile.size / (1024 * 1024)).toFixed(2)} MB • Ready
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-sm font-medium text-zinc-300">
+                    Click or drag & drop audio file here
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-1">MP3, WAV, M4A, AAC, OGG up to 50MB</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold uppercase tracking-wider text-zinc-300 mb-2 flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-yellow-400" />
+              <span>2. Paste Song Lyrics</span>
+            </span>
+            <span className="text-xs font-normal text-zinc-500">
+              One line per segment
+            </span>
+          </label>
+          <textarea
+            value={lyricsText}
+            onChange={(e) => setLyricsText(e.target.value)}
+            rows={8}
+            placeholder={`Paste raw song lyrics here...
+Line 1 of song
+Line 2 of song
+Chorus repeat line`}
+            className="w-full rounded-xl bg-zinc-950 border border-zinc-800 p-4 text-sm text-white placeholder-zinc-600 focus:border-yellow-500 focus:outline-none font-mono leading-relaxed"
+          />
+        </div>
+
+        {stage !== "idle" && (
+          <div className="rounded-xl bg-zinc-950 border border-zinc-800 p-4 space-y-3">
+            <div className="flex items-center justify-between text-xs font-semibold text-zinc-300">
+              <span className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-yellow-400 animate-spin" />
+                <span>{getStageLabel()}</span>
+              </span>
+              <span className="text-yellow-400">{stageProgress}%</span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-zinc-850 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-yellow-500 to-amber-400 transition-all duration-300"
+                style={{ width: `${stageProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="pt-2">
+          <button
+            onClick={handleProcess}
+            disabled={stage !== "idle" && stage !== "ready"}
+            className="w-full flex items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-yellow-500 via-amber-500 to-yellow-600 px-6 py-3.5 text-sm font-bold text-zinc-950 shadow-xl shadow-yellow-500/20 hover:brightness-110 disabled:opacity-50 transition-all"
+          >
+            <Wand2 className="h-5 w-5" />
+            <span>Generate Lyrical Video & Open Editor</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 01:07:33
 FILE PATH: src/components/ApiKeyOnboarding.tsx
 ACTION: Modified

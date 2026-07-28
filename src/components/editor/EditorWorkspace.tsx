@@ -1,9 +1,7 @@
 "use client";
 
-import { soundManager } from "@/services/sound-manager";
 import { useEditorStore } from "@/stores/editor-store";
 import { ArrowLeft, Play, Pause, RotateCcw, RotateCw, Volume2 } from "lucide-react";
-import { useEffect } from "react";
 import { LeftPanel } from "./LeftPanel";
 import { PreviewCanvas } from "./PreviewCanvas";
 import { Timeline } from "./Timeline";
@@ -13,42 +11,10 @@ export function EditorWorkspace() {
   const project = useEditorStore((s) => s.project);
   const setProject = useEditorStore((s) => s.setProject);
   const currentTime = useEditorStore((s) => s.currentTime);
-  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
   const isPlaying = useEditorStore((s) => s.isPlaying);
   const togglePlay = useEditorStore((s) => s.togglePlay);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
-
-  // Initialize sound manager when project loads
-  useEffect(() => {
-    if (!project?.audioUrl) return;
-
-    soundManager.init(project.audioUrl);
-    soundManager.onTimeUpdate((time) => {
-      setCurrentTime(time);
-    });
-    soundManager.onEnded(() => {
-      useEditorStore.getState().setIsPlaying(false);
-    });
-
-    return () => {
-      soundManager.destroy();
-    };
-  }, [project?.audioUrl, setCurrentTime]);
-
-  // Sync sound manager playback with store state
-  useEffect(() => {
-    if (isPlaying) {
-      soundManager.play();
-    } else {
-      soundManager.pause();
-    }
-  }, [isPlaying]);
-
-  // Sync sound manager position when currentTime changes
-  useEffect(() => {
-    soundManager.seek(currentTime);
-  }, [currentTime]);
 
   if (!project) return null;
 
@@ -110,17 +76,13 @@ export function EditorWorkspace() {
 
       {/* Main Workspace Layout */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Control Panel */}
         <LeftPanel />
 
-        {/* Right Editor Content (Preview + Timeline) */}
         <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950">
-          {/* Top Video Preview Canvas */}
           <div className="flex-1 overflow-hidden p-4 flex items-center justify-center bg-zinc-950/80">
             <PreviewCanvas />
           </div>
 
-          {/* Bottom Audio Waveform & Timeline Track */}
           <div className="h-72 border-t border-zinc-800 bg-zinc-900/50 flex flex-col shrink-0">
             <Waveform />
             <Timeline />

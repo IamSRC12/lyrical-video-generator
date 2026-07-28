@@ -1,9 +1,9 @@
 "use client";
 
-import type { AnimationName } from "@/lib/editor-schema";
-import { getStoredNvidiaKey } from "@/services/api-keys";
+import type { AnimationMode, AnimationName } from "@/lib/editor-schema";
+import { getStoredOpencodeKey } from "@/services/api-keys";
 import { useEditorStore } from "@/stores/editor-store";
-import { Download, Layers, Palette, Sparkles, Type, Wand2 } from "lucide-react";
+import { Download, Layers, Sparkles, Type, Wand2, ToggleLeft, ToggleRight } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -12,7 +12,10 @@ export function LeftPanel() {
   const updateTextStyle = useEditorStore((s) => s.updateTextStyle);
   const selectedSegmentId = useEditorStore((s) => s.selectedSegmentId);
   const setSegmentAnimation = useEditorStore((s) => s.setSegmentAnimation);
+  const setSegmentAnimationMode = useEditorStore((s) => s.setSegmentAnimationMode);
   const setAllAnimations = useEditorStore((s) => s.setAllAnimations);
+  const setKaraokeEnabled = useEditorStore((s) => s.setKaraokeEnabled);
+  const setSegmentKaraokeOverride = useEditorStore((s) => s.setSegmentKaraokeOverride);
 
   const [activeTab, setActiveTab] = useState<"style" | "animation" | "ai" | "export">("style");
   const [isExporting, setIsExporting] = useState(false);
@@ -26,7 +29,7 @@ export function LeftPanel() {
 
   const handleExportMp4 = async () => {
     setIsExporting(true);
-    setExportProgress(0);
+    setExportProgress(0.05);
 
     try {
       const response = await fetch("/api/export", {
@@ -40,64 +43,65 @@ export function LeftPanel() {
         throw new Error(errJson.error || `Export request failed (HTTP ${response.status})`);
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No readable stream received from server export endpoint");
+      const { jobId } = await response.json();
+      toast.info("Export job queued. Processing 60 FPS video server-side...");
 
-      const decoder = new TextDecoder();
-      let buffer = "";
+      // Poll export job status until completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/export/${jobId}`);
+          if (!statusRes.ok) return;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+          const jobData = await statusRes.json();
+          setExportProgress(Math.round(jobData.progress * 100));
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+          if (jobData.status === "completed") {
+            clearInterval(pollInterval);
+            setIsExporting(false);
+            setExportProgress(100);
+            toast.success("MP4 Video successfully rendered!");
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const event = JSON.parse(line);
-            if (event.type === "progress") {
-              setExportProgress(Math.round(event.progress * 100));
-            } else if (event.type === "done") {
-              setExportProgress(100);
-              toast.success("MP4 Video successfully rendered!");
-              
-              // Trigger file download
+            if (jobData.downloadUrl) {
               const link = document.createElement("a");
-              link.href = event.url;
+              link.href = jobData.downloadUrl;
               link.download = `${project.title || "lyrical-video"}.mp4`;
               document.body.appendChild(link);
               link.click();
               document.body.removeChild(link);
             }
-          } catch {
-            // Ignore parse errors for partial chunks
+          } else if (jobData.status === "failed") {
+            clearInterval(pollInterval);
+            setIsExporting(false);
+            toast.error(`Export failed: ${jobData.error || "Unknown render error"}`);
           }
+        } catch (pollErr) {
+          console.warn("Export polling error:", pollErr);
         }
-      }
+      }, 1500);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Export failed");
-    } finally {
       setIsExporting(false);
     }
   };
 
-  const handleRegenerateAiAnimations = async () => {
+  const handleRegenerateDeepSeekAnimations = async () => {
     setIsGeneratingAi(true);
-    try {
-      const nvidiaKey = await getStoredNvidiaKey();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (nvidiaKey) headers["x-nvidia-key"] = nvidiaKey;
+    const requestId = crypto.randomUUID();
+    useEditorStore.getState().beginGeneration(requestId);
 
-      const res = await fetch("/api/nvidia/animations", {
+    try {
+      const opencodeKey = await getStoredOpencodeKey();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (opencodeKey) headers["x-opencode-key"] = opencodeKey;
+
+      const res = await fetch("/api/opencode/animations", {
         method: "POST",
         headers,
         body: JSON.stringify({
           segments: project.segments,
           bpm: project.bpm || 120,
-          moodHint: "cinematic"
+          moodHint: "expressive",
+          requestId
         })
       });
 
@@ -107,18 +111,14 @@ export function LeftPanel() {
       }
 
       const data = await res.json();
-      if (data.segments?.length) {
-        useEditorStore.setState((s) => {
-          if (!s.project) return s;
-          return {
-            ...s,
-            project: { ...s.project, segments: data.segments }
-          };
-        });
-        toast.success("AI motion graphics regenerated for all segments!");
+      if (data.suggestions?.length) {
+        useEditorStore.getState().applyAnimationSuggestions(requestId, data.suggestions);
+        toast.success("DeepSeek V4 Flash motion graphics generated!");
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "AI generation failed");
+      const msg = err instanceof Error ? err.message : "AI generation failed";
+      useEditorStore.getState().failGeneration(requestId, msg);
+      toast.error(msg);
     } finally {
       setIsGeneratingAi(false);
     }
@@ -180,8 +180,22 @@ export function LeftPanel() {
           <div className="space-y-4">
             <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
               <Type className="h-4 w-4 text-yellow-400" />
-              <span>Typography & Colors</span>
+              <span>Typography & Karaoke</span>
             </h2>
+
+            {/* Project Global Karaoke Toggle */}
+            <div className="flex items-center justify-between rounded-xl bg-zinc-950 p-3 border border-zinc-850">
+              <div>
+                <div className="text-xs font-semibold text-zinc-200">Karaoke Word Highlighting</div>
+                <div className="text-[11px] text-zinc-400">Global project toggle</div>
+              </div>
+              <button
+                onClick={() => setKaraokeEnabled(!project.karaokeEnabled)}
+                className="text-yellow-400 hover:scale-105 transition-transform"
+              >
+                {project.karaokeEnabled ? <ToggleRight className="h-6 w-6" /> : <ToggleLeft className="h-6 w-6 text-zinc-600" />}
+              </button>
+            </div>
 
             <div>
               <label className="block text-xs font-medium text-zinc-300 mb-1">Font Family</label>
@@ -236,7 +250,7 @@ export function LeftPanel() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1">Karaoke Highlight</label>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Highlight Color</label>
                 <input
                   type="color"
                   value={style.highlightColor}
@@ -257,7 +271,7 @@ export function LeftPanel() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke Width ({style.outlineWidth}px)</label>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Stroke ({style.outlineWidth}px)</label>
                 <input
                   type="range"
                   min="0"
@@ -293,15 +307,45 @@ export function LeftPanel() {
             {selectedSeg ? (
               <div className="rounded-xl bg-zinc-950 p-3 border border-zinc-850 space-y-3">
                 <div className="text-xs font-semibold text-zinc-300">
-                  Editing Selected Segment: <span className="text-yellow-400 font-mono">"{selectedSeg.line}"</span>
+                  Selected Line: <span className="text-yellow-400 font-mono">"{selectedSeg.text}"</span>
                 </div>
+
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-400">Karaoke Override</span>
+                  <button
+                    onClick={() =>
+                      setSegmentKaraokeOverride(
+                        selectedSeg.id,
+                        selectedSeg.karaokeOverride === undefined ? false : !selectedSeg.karaokeOverride
+                      )
+                    }
+                    className="text-yellow-400"
+                  >
+                    {selectedSeg.karaokeOverride ?? project.karaokeEnabled ? "Enabled" : "Disabled"}
+                  </button>
+                </div>
+
                 <div>
-                  <label className="block text-xs font-medium text-zinc-400 mb-1">Animation Type</label>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Animation Mode</label>
+                  <select
+                    value={selectedSeg.animationMode}
+                    onChange={(e) => setSegmentAnimationMode(selectedSeg.id, e.target.value as AnimationMode)}
+                    className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
+                  >
+                    <option value="auto">Auto (Deterministic)</option>
+                    <option value="ai">AI (DeepSeek V4 Flash)</option>
+                    <option value="manual">Manual Override</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Animation Preset</label>
                   <select
                     value={selectedSeg.animation}
                     onChange={(e) => setSegmentAnimation(selectedSeg.id, e.target.value as AnimationName)}
                     className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2 text-xs text-white focus:border-yellow-500 focus:outline-none"
                   >
+                    <option value="none">None</option>
                     <option value="fade">Fade In/Out</option>
                     <option value="slide_up">Slide Up</option>
                     <option value="pop">Pop & Scale</option>
@@ -317,9 +361,9 @@ export function LeftPanel() {
             )}
 
             <div className="pt-2">
-              <label className="block text-xs font-medium text-zinc-300 mb-2">Apply Animation to ALL Segments</label>
+              <label className="block text-xs font-medium text-zinc-300 mb-2">Apply Preset to ALL Lines</label>
               <div className="grid grid-cols-2 gap-2">
-                {(["fade", "slide_up", "pop", "neon_pulse", "zoom_blur", "rain", "shake"] as AnimationName[]).map((anim) => (
+                {(["none", "fade", "slide_up", "pop", "neon_pulse", "zoom_blur", "rain", "shake"] as AnimationName[]).map((anim) => (
                   <button
                     key={anim}
                     onClick={() => setAllAnimations(anim)}
@@ -337,20 +381,20 @@ export function LeftPanel() {
           <div className="space-y-4">
             <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-yellow-400" />
-              <span>NVIDIA NIM AI Assistant</span>
+              <span>DeepSeek V4 Flash Assistant</span>
             </h2>
 
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Use Llama 3.3 70B to analyze lyric context and assign dynamic motion graphic presets matching the song's energy.
+              Query DeepSeek V4 Flash via OpenCode adapter to assign restrained, context-aware motion graphic presets.
             </p>
 
             <button
-              onClick={handleRegenerateAiAnimations}
+              onClick={handleRegenerateDeepSeekAnimations}
               disabled={isGeneratingAi}
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-2.5 text-xs font-bold text-zinc-950 hover:brightness-110 disabled:opacity-50 transition-all shadow-md shadow-yellow-500/20"
             >
               <Wand2 className="h-4 w-4" />
-              <span>{isGeneratingAi ? "Generating AI Animations..." : "Auto-Assign AI Animations"}</span>
+              <span>{isGeneratingAi ? "Generating AI Animations..." : "Generate AI Animations"}</span>
             </button>
           </div>
         )}
@@ -359,7 +403,7 @@ export function LeftPanel() {
           <div className="space-y-4">
             <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
               <Download className="h-4 w-4 text-yellow-400" />
-              <span>Export Production MP4</span>
+              <span>Async 60 FPS Video Export</span>
             </h2>
 
             <div className="rounded-xl bg-zinc-950 p-4 border border-zinc-850 space-y-2 text-xs">
@@ -369,7 +413,7 @@ export function LeftPanel() {
               </div>
               <div className="flex justify-between text-zinc-400">
                 <span>Frame Rate</span>
-                <span className="text-white font-mono">{project.fps} FPS</span>
+                <span className="text-yellow-400 font-mono">60 FPS</span>
               </div>
               <div className="flex justify-between text-zinc-400">
                 <span>Duration</span>
@@ -377,14 +421,14 @@ export function LeftPanel() {
               </div>
               <div className="flex justify-between text-zinc-400">
                 <span>Codec</span>
-                <span className="text-white font-mono">H.264 / AAC</span>
+                <span className="text-white font-mono">H.264 / MP4</span>
               </div>
             </div>
 
             {isExporting ? (
               <div className="space-y-2 rounded-xl bg-zinc-950 p-4 border border-zinc-800">
                 <div className="flex justify-between text-xs font-semibold text-zinc-300">
-                  <span>Rendering MP4 video...</span>
+                  <span>Rendering 60 FPS MP4 video...</span>
                   <span className="text-yellow-400">{exportProgress}%</span>
                 </div>
                 <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
@@ -400,7 +444,7 @@ export function LeftPanel() {
                 className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-3 text-xs font-bold text-zinc-950 hover:brightness-110 shadow-lg shadow-yellow-500/20"
               >
                 <Download className="h-4 w-4" />
-                <span>Render & Download MP4</span>
+                <span>Start Async 60 FPS Export</span>
               </button>
             )}
           </div>

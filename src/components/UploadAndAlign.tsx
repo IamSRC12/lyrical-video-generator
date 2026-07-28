@@ -1,7 +1,7 @@
 "use client";
 
 import { defaultTextStyle, type EditorProject, type LyricSegment } from "@/lib/editor-schema";
-import { getStoredGroqKey, getStoredNvidiaKey } from "@/services/api-keys";
+import { getStoredGroqKey, getStoredOpencodeKey } from "@/services/api-keys";
 import { useEditorStore } from "@/stores/editor-store";
 import { Activity, Key, Music, Sparkles, Upload, Wand2 } from "lucide-react";
 import { useRef, useState } from "react";
@@ -61,7 +61,6 @@ export function UploadAndAlign() {
     const signal = abortControllerRef.current.signal;
 
     try {
-      // 1. Upload audio file asset
       setStage("uploading");
       setStageProgress(15);
 
@@ -80,13 +79,12 @@ export function UploadAndAlign() {
       }
 
       const assetData = await uploadRes.json();
+      const audioAssetId = assetData.id;
       const audioUrl = assetData.url;
 
-      // Retrieve encrypted API keys
       const groqKey = await getStoredGroqKey();
-      const nvidiaKey = await getStoredNvidiaKey();
+      const opencodeKey = await getStoredOpencodeKey();
 
-      // 2. Transcribe & Align via Server API
       setStage("transcribing");
       setStageProgress(35);
 
@@ -116,7 +114,6 @@ export function UploadAndAlign() {
       let segments: LyricSegment[] = transData.segments;
       const duration = transData.duration || 120;
 
-      // 3. Client Beat Detection (concurrent audio decoding)
       setStage("beat_detection");
       setStageProgress(80);
 
@@ -138,16 +135,15 @@ export function UploadAndAlign() {
         console.warn("Client beat detection skipped:", err);
       }
 
-      // 4. Optional AI Animation Generation
-      if (nvidiaKey || process.env.NEXT_PUBLIC_ENABLE_AI !== "false") {
+      if (opencodeKey || process.env.NEXT_PUBLIC_ENABLE_AI !== "false") {
         setStage("ai_animation");
         setStageProgress(90);
 
         try {
           const aiHeaders: Record<string, string> = { "Content-Type": "application/json" };
-          if (nvidiaKey) aiHeaders["x-nvidia-key"] = nvidiaKey;
+          if (opencodeKey) aiHeaders["x-opencode-key"] = opencodeKey;
 
-          const aiRes = await fetch("/api/nvidia/animations", {
+          const aiRes = await fetch("/api/opencode/animations", {
             method: "POST",
             headers: aiHeaders,
             body: JSON.stringify({ segments, bpm, moodHint: "expressive" }),
@@ -156,41 +152,51 @@ export function UploadAndAlign() {
 
           if (aiRes.ok) {
             const aiData = await aiRes.json();
-            if (aiData.segments?.length) {
-              segments = aiData.segments;
+            if (aiData.suggestions?.length) {
+              const sugMap = new Map(aiData.suggestions.map((s: any) => [s.segmentId, s]));
+              segments = segments.map((seg) => {
+                const sug = sugMap.get(seg.id);
+                if (sug) {
+                  return {
+                    ...seg,
+                    animationMode: "ai",
+                    animation: sug.animation,
+                    animationIntensity: sug.intensity ?? 1.0
+                  };
+                }
+                return seg;
+              });
             }
           }
         } catch (err) {
-          console.warn("NVIDIA NIM AI animation generation skipped:", err);
+          console.warn("DeepSeek AI animation generation skipped:", err);
         }
       }
 
-      // 5. Construct Initial Project State
       setStage("ready");
       setStageProgress(100);
 
       const newProject: EditorProject = {
-        version: 1,
+        version: 2,
+        id: crypto.randomUUID(),
         title: audioFile.name.replace(/\.[^/.]+$/, ""),
-        fps: 30,
+        fps: 60,
         width: 1920,
         height: 1080,
         duration: Math.max(duration, segments[segments.length - 1]?.end || 0),
+        audioAssetId,
         audioUrl,
         backgroundColor: "#090d16",
+        karaokeEnabled: true,
+        beatSyncEnabled: false,
         segments,
         beats,
         bpm,
-        textStyle: defaultTextStyle,
-        toggles: {
-          beatSync: false,
-          contextualAnimations: true,
-          karaokeHighlight: true
-        }
+        textStyle: defaultTextStyle
       };
 
       setProject(newProject);
-      toast.success("Project generated! Ready to edit.");
+      toast.success("Project generated with 60 FPS timing! Ready to edit.");
     } catch (error) {
       if (signal.aborted) {
         toast.info("Processing cancelled.");
@@ -199,7 +205,7 @@ export function UploadAndAlign() {
         toast.error(msg);
       }
       setStage("idle");
-    } finally {
+    } font-normal {
       abortControllerRef.current = null;
     }
   };
@@ -210,8 +216,8 @@ export function UploadAndAlign() {
       case "transcribing": return "Transcribing with Groq Whisper v3...";
       case "aligning": return "Performing global DP fuzzy alignment...";
       case "beat_detection": return "Analyzing audio beats & BPM...";
-      case "ai_animation": return "Generating AI animations via NVIDIA NIM...";
-      case "ready": return "Finalizing project...";
+      case "ai_animation": return "Generating AI animations via DeepSeek V4 Flash...";
+      case "ready": return "Finalizing 60 FPS project...";
       default: return "";
     }
   };
@@ -228,7 +234,7 @@ export function UploadAndAlign() {
           <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
             <span>AI Lyrical Video Studio</span>
             <span className="rounded-full bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-400 border border-yellow-500/20">
-              Pro v1.0
+              Pro 60 FPS
             </span>
           </h1>
           <p className="mt-1 text-sm text-zinc-400">
@@ -246,7 +252,6 @@ export function UploadAndAlign() {
       </div>
 
       <div className="space-y-6 rounded-2xl bg-zinc-900/70 border border-zinc-800/80 p-8 shadow-2xl backdrop-blur-xl">
-        {/* Audio File Dropzone */}
         <div>
           <label className="block text-xs font-bold uppercase tracking-wider text-zinc-300 mb-2 flex items-center gap-2">
             <Music className="h-4 w-4 text-yellow-400" />
@@ -282,7 +287,6 @@ export function UploadAndAlign() {
           </div>
         </div>
 
-        {/* Lyrics Input */}
         <div>
           <label className="block text-xs font-bold uppercase tracking-wider text-zinc-300 mb-2 flex items-center justify-between">
             <span className="flex items-center gap-2">
@@ -305,7 +309,6 @@ Chorus repeat line`}
           />
         </div>
 
-        {/* Progress Bar & Status */}
         {stage !== "idle" && (
           <div className="rounded-xl bg-zinc-950 border border-zinc-800 p-4 space-y-3">
             <div className="flex items-center justify-between text-xs font-semibold text-zinc-300">
@@ -324,7 +327,6 @@ Chorus repeat line`}
           </div>
         )}
 
-        {/* Execute Action */}
         <div className="pt-2">
           <button
             onClick={handleProcess}
