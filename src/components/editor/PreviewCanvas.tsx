@@ -312,7 +312,6 @@ export function PreviewCanvas() {
           }}
           controls={false}
           clickToPlay={false}
-          spaceKeyToPlay={false}
         />
       </div>
 
