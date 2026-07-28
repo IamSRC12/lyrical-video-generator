@@ -5,10 +5,13 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  Clock,
+  FastForward,
   ImagePlus,
   LoaderCircle,
   Move,
   Palette,
+  Rewind,
   Sparkles,
   Trash2,
   Type
@@ -37,6 +40,11 @@ export function LeftPanel() {
   const setBackground = useEditorStore((s) => s.setBackground);
   const patchTextStyle = useEditorStore((s) => s.patchTextStyle);
   const setToggle = useEditorStore((s) => s.setToggle);
+
+  const shiftSegment = useEditorStore((s) => s.shiftSegment);
+  const shiftAllAfter = useEditorStore((s) => s.shiftAllAfter);
+  const setSegmentStartFromPlayhead = useEditorStore((s) => s.setSegmentStartFromPlayhead);
+  const setSegmentEndFromPlayhead = useEditorStore((s) => s.setSegmentEndFromPlayhead);
 
   const backgroundInputRef = useRef<HTMLInputElement>(null);
   const [uploadingBackground, setUploadingBackground] = useState(false);
@@ -369,7 +377,7 @@ export function LeftPanel() {
           {(
             [
               ["karaokeHighlight", "Karaoke Highlight"],
-              ["beatSync", "Beat Sync"],
+              ["beatSync", "Rhythm Motion"],
               ["contextualAnimations", "AI Animations"]
             ] as const
           ).map(([key, label]) => (
@@ -395,50 +403,135 @@ export function LeftPanel() {
             Segments ({project.segments.length})
           </div>
 
-          <div className="space-y-1">
-            {project.segments.map((segment) => (
-              <div
-                key={segment.id}
-                className={cn(
-                  "cursor-pointer rounded-lg border border-transparent p-3 text-sm transition-all",
-                  "hover:border-white/8 hover:bg-white/3",
-                  selectedSegmentId === segment.id &&
-                    "border-violet-500/30 bg-violet-500/8"
-                )}
-                onClick={() => selectSegment(segment.id)}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex-1 truncate font-medium">
-                    {segment.line}
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    {segment.start.toFixed(1)}s
-                  </span>
-                </div>
+          <div className="space-y-2">
+            {project.segments.map((segment) => {
+              const isSelected = selectedSegmentId === segment.id;
+              const confidence = segment.confidence ?? 1;
 
-                {selectedSegmentId === segment.id && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {ANIMATION_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        className={cn(
-                          "rounded-md px-2 py-0.5 text-[10px] font-medium transition-all",
-                          "border border-white/8 hover:border-violet-500/30",
-                          segment.animation === opt.value &&
-                            "border-violet-500 bg-violet-500/15 text-violet-300"
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAnimation(segment.id, opt.value);
-                        }}
-                      >
-                        {opt.emoji} {opt.label}
-                      </button>
-                    ))}
+              return (
+                <div
+                  key={segment.id}
+                  className={cn(
+                    "cursor-pointer rounded-lg border border-transparent p-3 text-sm transition-all",
+                    "hover:border-white/8 hover:bg-white/3",
+                    isSelected && "border-violet-500/30 bg-violet-500/8"
+                  )}
+                  onClick={() => selectSegment(segment.id)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex-1 truncate font-medium">
+                      {segment.line}
+                    </span>
+
+                    {/* Confidence Indicator Badge */}
+                    {confidence < 0.8 && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        Review timing
+                      </span>
+                    )}
+
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {segment.start.toFixed(1)}s - {segment.end.toFixed(1)}s
+                    </span>
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {isSelected && (
+                    <div className="mt-3 space-y-2 border-t border-white/5 pt-2">
+                      {/* Manual Timing Shift Controls */}
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                          <Clock size={10} /> Shift timing:
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="button-ghost px-1.5 py-0.5 text-[10px] text-violet-300"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              shiftSegment(segment.id, -0.1);
+                            }}
+                            title="Shift line -0.1s"
+                          >
+                            <Rewind size={10} /> -0.1s
+                          </button>
+
+                          <button
+                            type="button"
+                            className="button-ghost px-1.5 py-0.5 text-[10px] text-violet-300"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              shiftSegment(segment.id, 0.1);
+                            }}
+                            title="Shift line +0.1s"
+                          >
+                            +0.1s <FastForward size={10} />
+                          </button>
+
+                          <button
+                            type="button"
+                            className="button-ghost px-1.5 py-0.5 text-[10px] text-cyan-300"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              shiftAllAfter(segment.id, 0.1);
+                            }}
+                            title="Shift all lines after this line by +0.1s"
+                          >
+                            Shift All &gt;&gt;
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Set Start / End from Playhead */}
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          className="button-ghost flex-1 py-0.5 text-[10px] text-slate-300"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSegmentStartFromPlayhead(segment.id);
+                            toast.info("Set start time from playhead.");
+                          }}
+                        >
+                          Set Start
+                        </button>
+                        <button
+                          type="button"
+                          className="button-ghost flex-1 py-0.5 text-[10px] text-slate-300"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSegmentEndFromPlayhead(segment.id);
+                            toast.info("Set end time from playhead.");
+                          }}
+                        >
+                          Set End
+                        </button>
+                      </div>
+
+                      {/* Animation selection options */}
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {ANIMATION_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            className={cn(
+                              "rounded-md px-2 py-0.5 text-[10px] font-medium transition-all",
+                              "border border-white/8 hover:border-violet-500/30",
+                              segment.animation === opt.value &&
+                                "border-violet-500 bg-violet-500/15 text-violet-300"
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAnimation(segment.id, opt.value);
+                            }}
+                          >
+                            {opt.emoji} {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
