@@ -3,22 +3,21 @@ import { Composition } from "remotion";
 import { LyricalComposition } from "./Composition";
 
 const defaultProjectProps: EditorProject = {
-  version: 1,
-  title: "Default Preview",
-  fps: 30,
+  version: 2,
+  id: "default-project",
+  title: "Default 60 FPS Preview",
+  fps: 60,
   width: 1920,
   height: 1080,
   duration: 10,
+  audioAssetId: "",
   audioUrl: "",
   backgroundColor: "#090d16",
+  karaokeEnabled: true,
+  beatSyncEnabled: false,
   segments: [],
   beats: [],
-  textStyle: defaultTextStyle,
-  toggles: {
-    beatSync: false,
-    contextualAnimations: true,
-    karaokeHighlight: true
-  }
+  textStyle: defaultTextStyle
 };
 
 export const RemotionRoot: React.FC = () => {
@@ -26,8 +25,8 @@ export const RemotionRoot: React.FC = () => {
     <Composition
       id="LyricalVideo"
       component={LyricalComposition}
-      durationInFrames={300}
-      fps={30}
+      durationInFrames={600}
+      fps={60}
       width={1920}
       height={1080}
       defaultProps={{

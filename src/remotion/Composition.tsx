@@ -13,7 +13,7 @@ export const LyricalComposition: React.FC<LyricalCompositionProps> = ({ project 
 
   const style = project.textStyle;
 
-  // Active lyric segment
+  // Find active segment by currentTime
   const activeSegment = project.segments.find(
     (seg) => currentTime >= seg.start && currentTime <= seg.end
   );
@@ -36,12 +36,17 @@ export const LyricalComposition: React.FC<LyricalCompositionProps> = ({ project 
 
   // Beat pulse calculation
   let beatScale = 1.0;
-  if (project.toggles?.beatSync && project.beats?.length) {
+  if (project.beatSyncEnabled && project.beats?.length) {
     const isNearBeat = project.beats.some((b) => Math.abs(b - currentTime) < 0.08);
     if (isNearBeat) {
       beatScale = 1.05;
     }
   }
+
+  // Karaoke enablement check: per-segment override takes precedence over project-level toggle
+  const isKaraokeActive = activeSegment
+    ? (activeSegment.karaokeOverride ?? project.karaokeEnabled ?? true)
+    : false;
 
   return (
     <AbsoluteFill
@@ -54,7 +59,7 @@ export const LyricalComposition: React.FC<LyricalCompositionProps> = ({ project 
         overflow: "hidden"
       }}
     >
-      {/* Background Image/Color Overlay */}
+      {/* Background Image Overlay */}
       {project.backgroundUrl && (
         <AbsoluteFill>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -71,10 +76,10 @@ export const LyricalComposition: React.FC<LyricalCompositionProps> = ({ project 
         </AbsoluteFill>
       )}
 
-      {/* Render Audio Track */}
+      {/* Render Single Audio Track */}
       {project.audioUrl && <Audio src={project.audioUrl} />}
 
-      {/* Active Lyric Display */}
+      {/* Active Lyric Line */}
       {activeSegment && (
         <div
           style={{
@@ -104,27 +109,26 @@ export const LyricalComposition: React.FC<LyricalCompositionProps> = ({ project 
             transition: "transform 0.05s ease-out"
           }}
         >
-          {/* Word-level Karaoke Highlighting */}
-          {project.toggles?.karaokeHighlight && activeSegment.words?.length ? (
+          {isKaraokeActive && activeSegment.words?.length ? (
             <div style={{ display: "flex", flexWrap: "wrap", justifyContent: style.align, gap: "0.25em" }}>
-              {activeSegment.words.map((w, idx) => {
-                const isWordActive = currentTime >= w.start && currentTime <= w.end;
+              {activeSegment.words.map((w) => {
+                const isWordActive = currentTime >= w.start;
                 return (
                   <span
-                    key={idx}
+                    key={w.id}
                     style={{
                       color: isWordActive ? style.highlightColor : style.color,
-                      transform: isWordActive ? "scale(1.08)" : "scale(1.0)",
-                      transition: "color 0.1s ease, transform 0.1s ease"
+                      transform: isWordActive ? "scale(1.06)" : "scale(1.0)",
+                      transition: "color 0.08s ease, transform 0.08s ease"
                     }}
                   >
-                    {w.word}
+                    {w.text}
                   </span>
                 );
               })}
             </div>
           ) : (
-            <span>{activeSegment.line}</span>
+            <span>{activeSegment.text}</span>
           )}
         </div>
       )}
