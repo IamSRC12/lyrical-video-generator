@@ -17,6 +17,24 @@ export function PreviewCanvas() {
 
   const durationInFrames = Math.max(1, Math.ceil((project.duration || 10) * project.fps));
 
+  // Listen to frame update events from Remotion Player ref
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+
+    const onFrame = (e: { detail: { frame: number } }) => {
+      if (isPlaying) {
+        const newTime = e.detail.frame / project.fps;
+        setCurrentTime(newTime);
+      }
+    };
+
+    player.addEventListener("frameupdate", onFrame);
+    return () => {
+      player.removeEventListener("frameupdate", onFrame);
+    };
+  }, [isPlaying, project.fps, setCurrentTime]);
+
   // Sync player play/pause state
   useEffect(() => {
     const player = playerRef.current;
@@ -58,12 +76,6 @@ export function PreviewCanvas() {
         }}
         controls={false}
         loop
-        onFrameUpdate={(e: { detail: { frame: number } }) => {
-          const newTime = e.detail.frame / project.fps;
-          if (isPlaying) {
-            setCurrentTime(newTime);
-          }
-        }}
       />
     </div>
   );

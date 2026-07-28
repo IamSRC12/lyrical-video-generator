@@ -17,3 +17,11 @@ export async function requireAuth() {
     response: null
   };
 }
+
+export async function requireUser() {
+  const res = await requireAuth();
+  if (res.response) {
+    throw res.response;
+  }
+  return res.session;
+}
