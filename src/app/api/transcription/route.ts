@@ -1,87 +1,60 @@
-import {alignLyricsToWords} from "@/lib/alignment";
-import {requireUser} from "@/lib/auth-guard";
-import {transcribeWithGroq} from "@/services/groq";
-
-export const runtime = "nodejs";
-export const maxDuration = 300;
-
-const allowedTypes = new Set([
-  "audio/mpeg",
-  "audio/mp3",
-  "audio/wav",
-  "audio/x-wav",
-  "audio/flac",
-  "audio/mp4",
-  "audio/ogg",
-  "audio/webm"
-]);
+import { alignLyricsToWords } from "@/lib/alignment";
+import { requireAuth } from "@/lib/auth-guard";
+import { transcribeWithGroq } from "@/services/groq";
+import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
   try {
-    await requireUser();
+    const customGroqKey = request.headers.get("x-groq-key");
+    const groqApiKey = customGroqKey || process.env.GROQ_API_KEY;
+
+    if (!groqApiKey) {
+      return NextResponse.json(
+        { error: "No Groq API key provided. Please configure custom API key or set GROQ_API_KEY on server." },
+        { status: 400 }
+      );
+    }
 
     const formData = await request.formData();
-    const file = formData.get("audio");
-    const lyrics = formData.get("lyrics");
-    const apiKey = request.headers.get("x-groq-key");
+    const file = formData.get("file") as File | null;
+    const lyricsText = formData.get("lyrics") as string | null;
 
-    if (!(file instanceof File)) {
-      return Response.json({message: "Audio file is required."}, {status: 400});
+    if (!file) {
+      return NextResponse.json({ error: "Missing audio file" }, { status: 400 });
     }
 
-    if (typeof lyrics !== "string" || !lyrics.trim()) {
-      return Response.json({message: "Lyrics are required."}, {status: 400});
+    if (!lyricsText || !lyricsText.trim()) {
+      return NextResponse.json({ error: "Missing lyrics text" }, { status: 400 });
     }
 
-    if (!apiKey) {
-      return Response.json({message: "Groq API key is missing."}, {status: 400});
-    }
-
-    const maxBytes = Number(process.env.MAX_UPLOAD_BYTES ?? 100_000_000);
-
-    if (file.size > maxBytes) {
-      return Response.json(
-        {message: `Audio exceeds the ${maxBytes} byte application limit.`},
-        {status: 413}
-      );
-    }
-
-    if (file.type && !allowedTypes.has(file.type)) {
-      return Response.json(
-        {message: `Unsupported audio type: ${file.type}`},
-        {status: 415}
-      );
-    }
-
+    // Step 1: Transcribe audio with Groq Whisper
     const transcription = await transcribeWithGroq({
-      apiKey,
+      apiKey: groqApiKey,
       file,
-      prompt: lyrics.slice(0, 800)
+      prompt: lyricsText.slice(0, 500)
     });
 
-    const segments = alignLyricsToWords(lyrics, transcription.words);
-    const finalWord = transcription.words.at(-1);
+    if (!transcription.words || transcription.words.length === 0) {
+      return NextResponse.json(
+        { error: "Groq transcription returned no timed words. Check audio clarity or format." },
+        { status: 422 }
+      );
+    }
 
-    return Response.json({
-      transcript: transcription.text ?? "",
-      duration:
-        transcription.duration ??
-        finalWord?.end ??
-        segments.at(-1)?.end ??
-        1,
-      segments
+    // Step 2: Perform global DP alignment
+    const segments = alignLyricsToWords(lyricsText, transcription.words);
+
+    return NextResponse.json({
+      segments,
+      duration: transcription.duration || 0,
+      whisperText: transcription.text || "",
+      wordCount: transcription.words.length
     });
   } catch (error) {
-    if (error instanceof Response) return error;
-
-    console.error("Transcription error:", error);
-
-    return Response.json(
-      {
-        message:
-          error instanceof Error ? error.message : "Transcription failed."
-      },
-      {status: 500}
-    );
+    const message = error instanceof Error ? error.message : "Unknown transcription error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
