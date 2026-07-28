@@ -3,8 +3,11 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {useEditorStore} from "@/stores/editor-store";
 import {
+  Clock,
+  CornerDownLeft,
   ImagePlus,
   Music,
+  Navigation,
   Pause,
   Play,
   Rewind,
@@ -31,11 +34,16 @@ export function PreviewCanvas() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number | null>(null);
+  const jumpInputRef = useRef<HTMLInputElement>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPlayingReverse, setIsPlayingReverse] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+
+  // Jump to timestamp state
+  const [showJumpInput, setShowJumpInput] = useState(false);
+  const [jumpInputValue, setJumpInputValue] = useState("");
 
   // Sync audio currentTime when playhead is updated from outside while paused
   useEffect(() => {
@@ -45,6 +53,13 @@ export function PreviewCanvas() {
       }
     }
   }, [playhead, isPlaying, isPlayingReverse]);
+
+  // Focus jump input when toggled open
+  useEffect(() => {
+    if (showJumpInput) {
+      setTimeout(() => jumpInputRef.current?.focus(), 50);
+    }
+  }, [showJumpInput]);
 
   // Handle Drag and Drop for images and audio
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -220,6 +235,44 @@ export function PreviewCanvas() {
     return `${m}:${String(s).padStart(2, "0")}`;
   }
 
+  function parseTimestamp(str: string): number | null {
+    const trimmed = str.trim();
+    if (!trimmed) return null;
+    if (trimmed.includes(":")) {
+      const parts = trimmed.split(":");
+      if (parts.length === 2) {
+        const m = parseFloat(parts[0]);
+        const s = parseFloat(parts[1]);
+        if (!isNaN(m) && !isNaN(s)) return m * 60 + s;
+      } else if (parts.length === 3) {
+        const h = parseFloat(parts[0]);
+        const m = parseFloat(parts[1]);
+        const s = parseFloat(parts[2]);
+        if (!isNaN(h) && !isNaN(m) && !isNaN(s)) return h * 3600 + m * 60 + s;
+      }
+    } else {
+      const val = parseFloat(trimmed);
+      if (!isNaN(val)) return val;
+    }
+    return null;
+  }
+
+  function executeJump() {
+    const seconds = parseTimestamp(jumpInputValue);
+    if (seconds === null) {
+      toast.error("Invalid timestamp format. Use MM:SS or seconds (e.g. 1:25 or 85)");
+      return;
+    }
+    if (seconds < 0 || seconds > project.duration) {
+      toast.error(`Timestamp out of range (0:00 - ${formatTime(project.duration)})`);
+      return;
+    }
+    handleSeek(seconds);
+    toast.success(`Jumped to ${formatTime(seconds)}`);
+    setShowJumpInput(false);
+    setJumpInputValue("");
+  }
+
   return (
     <div
       className={cn(
@@ -332,7 +385,7 @@ export function PreviewCanvas() {
         </div>
 
         {/* Transport Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             className="button-ghost p-1.5"
             onClick={handleRestart}
@@ -392,11 +445,63 @@ export function PreviewCanvas() {
             {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
           </button>
 
+          {/* Dedicated "Jump to Timestamp" Toggle Button */}
+          <button
+            className={cn(
+              "button-ghost px-2 py-1 flex items-center gap-1.5 text-xs font-medium text-violet-400 transition-colors",
+              showJumpInput && "bg-violet-500/20 text-violet-300 ring-1 ring-violet-500/40"
+            )}
+            onClick={() => {
+              setShowJumpInput(!showJumpInput);
+              if (!showJumpInput) {
+                setJumpInputValue(formatTime(playhead));
+              }
+            }}
+            title="Jump to specific timestamp"
+          >
+            <Navigation size={13} />
+            <span>Jump To</span>
+          </button>
+
+          {/* Inline Jump to Timestamp Input Popover */}
+          {showJumpInput && (
+            <div className="flex items-center gap-1.5 bg-black/60 border border-violet-500/40 rounded-md px-2 py-0.5 animate-fade-in">
+              <Clock size={13} className="text-violet-400" />
+              <input
+                ref={jumpInputRef}
+                type="text"
+                value={jumpInputValue}
+                onChange={(e) => setJumpInputValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") executeJump();
+                  if (e.key === "Escape") setShowJumpInput(false);
+                }}
+                placeholder="MM:SS (e.g. 1:25)"
+                className="w-24 bg-transparent text-xs font-mono text-white focus:outline-none placeholder:text-slate-500"
+              />
+              <button
+                onClick={executeJump}
+                className="button-primary px-1.5 py-0.5 text-[10px] flex items-center gap-1"
+                title="Go to timestamp"
+              >
+                Go <CornerDownLeft size={10} />
+              </button>
+            </div>
+          )}
+
           <div className="flex-1" />
 
-          <span className="font-mono text-xs text-slate-400">
+          {/* Clickable time display to trigger Jump To */}
+          <button
+            className="font-mono text-xs text-slate-400 hover:text-violet-300 transition-colors"
+            onClick={() => {
+              setShowJumpInput(true);
+              setJumpInputValue(formatTime(playhead));
+            }}
+            title="Click to jump to timestamp"
+          >
             {formatTime(playhead)} / {formatTime(project.duration)}
-          </span>
+          </button>
         </div>
       </div>
 
