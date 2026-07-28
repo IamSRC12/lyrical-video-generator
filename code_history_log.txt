@@ -1,4 +1,553 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 01:05:58
+FILE PATH: src/app/api/opencode/animations/route.ts
+ACTION: Created
+================================================================================
+import { requireAuth } from "@/lib/auth-guard";
+import { lyricSegmentSchema } from "@/lib/editor-schema";
+import { generateDeepSeekAnimations } from "@/services/opencode";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+const requestBodySchema = z.object({
+  segments: z.array(lyricSegmentSchema),
+  bpm: z.number().optional(),
+  moodHint: z.string().optional(),
+  requestId: z.string().optional()
+});
+
+export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
+  try {
+    const customKey = request.headers.get("x-opencode-key");
+    const apiKey = customKey || process.env.OPENCODE_API_KEY;
+
+    const body = await request.json();
+    const { segments, bpm, moodHint, requestId } = requestBodySchema.parse(body);
+
+    const result = await generateDeepSeekAnimations({
+      apiKey,
+      segments,
+      bpm,
+      moodHint,
+      requestId
+    });
+
+    return NextResponse.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DeepSeek AI animation generation failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:05:42
+FILE PATH: src/services/opencode.ts
+ACTION: Created
+================================================================================
+import { animationSchema, type AnimationName, type LyricSegment } from "@/lib/editor-schema";
+import { chooseAutoAnimation } from "@/lib/auto-animation";
+import { z } from "zod";
+
+const aiSuggestionSchema = z.object({
+  segmentId: z.string(),
+  animation: animationSchema,
+  intensity: z.number().min(0.1).max(3.0).optional().default(1.0),
+  reason: z.string().optional()
+});
+
+const aiResponseSchema = z.object({
+  suggestions: z.array(aiSuggestionSchema)
+});
+
+function sanitizeJsonFence(text: string): string {
+  let clean = text.trim();
+  if (clean.startsWith("```")) {
+    clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  }
+  return clean.trim();
+}
+
+export async function generateDeepSeekAnimations(options: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  segments: LyricSegment[];
+  bpm?: number;
+  moodHint?: string;
+  requestId?: string;
+}): Promise<{ suggestions: Array<{ segmentId: string; animation: AnimationName; intensity: number }> }> {
+  const { segments, bpm = 120, moodHint = "expressive" } = options;
+
+  const apiKey = options.apiKey || process.env.OPENCODE_API_KEY;
+  const baseUrl = (options.baseUrl || process.env.OPENCODE_BASE_URL || "https://api.deepseek.com/v1").replace(/\/+$/, "");
+  const model = options.model || process.env.OPENCODE_MODEL || "deepseek-v4-flash";
+  const timeoutMs = Number(process.env.OPENCODE_TIMEOUT_MS ?? 30000);
+
+  if (!segments.length) {
+    return { suggestions: [] };
+  }
+
+  if (!apiKey) {
+    // Return auto animations if no API key is provided
+    return {
+      suggestions: segments.map((seg) => ({
+        segmentId: seg.id,
+        animation: chooseAutoAnimation({
+          text: seg.text,
+          duration: seg.end - seg.start,
+          alignmentConfidence: seg.alignmentConfidence,
+          beatNearStart: false
+        }),
+        intensity: 1.0
+      }))
+    };
+  }
+
+  const promptInput = segments.map((s) => ({
+    segmentId: s.id,
+    lineIndex: s.lineIndex,
+    text: s.text,
+    duration: Number((s.end - s.start).toFixed(2))
+  }));
+
+  const systemPrompt = `You are a professional music video motion graphic designer.
+Analyze the lyric segments for a song with BPM=${bpm} and mood="${moodHint}".
+Assign an animation preset to each segment from ONLY this list: ["none", "fade", "slide_up", "pop", "neon_pulse", "zoom_blur", "rain", "shake"].
+You MUST return ONLY valid JSON matching this exact schema:
+{
+  "suggestions": [
+    {
+      "segmentId": "exact-segment-id",
+      "animation": "chosen_animation_name",
+      "intensity": 1.0,
+      "reason": "short explanation"
+    }
+  ]
+}
+Do NOT include any extra text, explanations, or Markdown fences.`;
+
+  const userPrompt = `Assign motion graphic animations for these segments:\n${JSON.stringify(promptInput, null, 2)}`;
+
+  let lastError: Error | null = null;
+  const maxRetries = 2;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const endpoint = `${baseUrl}/chat/completions`;
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+          ],
+          temperature: 0.3,
+          max_tokens: 1024
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`OpenCode/DeepSeek API error (HTTP ${response.status}): ${errText.slice(0, 200)}`);
+      }
+
+      const data = await response.json();
+      const rawContent = data.choices?.[0]?.message?.content || "";
+      const cleanJson = sanitizeJsonFence(rawContent);
+
+      const parsed = JSON.parse(cleanJson);
+      const validated = aiResponseSchema.parse(parsed);
+
+      return {
+        suggestions: validated.suggestions.map((s) => ({
+          segmentId: s.segmentId,
+          animation: s.animation,
+          intensity: s.intensity ?? 1.0
+        }))
+      };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxRetries) {
+        await new Promise((res) => setTimeout(res, attempt * 600));
+      }
+    }
+  }
+
+  console.warn("OpenCode/DeepSeek AI animation generation failed, falling back to auto-animations:", lastError?.message);
+
+  return {
+    suggestions: segments.map((seg) => ({
+      segmentId: seg.id,
+      animation: chooseAutoAnimation({
+        text: seg.text,
+        duration: seg.end - seg.start,
+        alignmentConfidence: seg.alignmentConfidence,
+        beatNearStart: false
+      }),
+      intensity: 1.0
+    }))
+  };
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:05:24
+FILE PATH: src/lib/alignment.ts
+ACTION: Modified
+================================================================================
+import type { GroqWord } from "@/services/groq";
+import { chooseAutoAnimation } from "./auto-animation";
+import type { LyricSegment, TimedWord } from "./editor-schema";
+
+type LyricToken = {
+  original: string;
+  normalized: string;
+  lineIndex: number;
+};
+
+function normalizeToken(value: string): string {
+  return value
+    .toLocaleLowerCase()
+    .normalize("NFKC")
+    .replace(/\p{Mark}/gu, "")
+    .replace(/[^\p{Letter}\p{Number}']/gu, "");
+}
+
+function tokenizeLyrics(lines: string[]): LyricToken[] {
+  return lines.flatMap((line, lineIndex) =>
+    line
+      .trim()
+      .split(/\s+/u)
+      .filter(Boolean)
+      .map((original) => ({
+        original,
+        normalized: normalizeToken(original),
+        lineIndex
+      }))
+  );
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + cost
+      );
+    }
+    previous = current;
+  }
+
+  return previous[b.length];
+}
+
+function substitutionCost(lyricNorm: string, whisperNorm: string): number {
+  if (!lyricNorm || !whisperNorm) return 1.0;
+  if (lyricNorm === whisperNorm) return 0.0;
+
+  const maxLen = Math.max(lyricNorm.length, whisperNorm.length, 1);
+  const distance = levenshteinDistance(lyricNorm, whisperNorm);
+  const ratio = distance / maxLen;
+
+  if (ratio <= 0.2) return 0.2;
+  if (ratio <= 0.45) return 0.6;
+  return 1.4;
+}
+
+function globalDPAlign(
+  lyricTokens: LyricToken[],
+  whisperWords: GroqWord[]
+): Array<{ whisperIndex: number | null; confidence: number }> {
+  const n = lyricTokens.length;
+  const m = whisperWords.length;
+  const gapLyric = 0.85;
+  const gapWhisper = 0.6;
+
+  const scores: number[][] = Array.from({ length: n + 1 }, () =>
+    Array(m + 1).fill(0)
+  );
+
+  const moves: Array<Array<"diag" | "up" | "left" | null>> = Array.from(
+    { length: n + 1 },
+    () => Array(m + 1).fill(null)
+  );
+
+  for (let i = 1; i <= n; i++) {
+    scores[i][0] = i * gapLyric;
+    moves[i][0] = "up";
+  }
+
+  for (let j = 1; j <= m; j++) {
+    scores[0][j] = j * gapWhisper;
+    moves[0][j] = "left";
+  }
+
+  for (let i = 1; i <= n; i++) {
+    const lNorm = lyricTokens[i - 1].normalized;
+    for (let j = 1; j <= m; j++) {
+      const wNorm = normalizeToken(whisperWords[j - 1].word);
+      const subCost = substitutionCost(lNorm, wNorm);
+
+      const diagonal = scores[i - 1][j - 1] + subCost;
+      const up = scores[i - 1][j] + gapLyric;
+      const left = scores[i][j - 1] + gapWhisper;
+
+      const minVal = Math.min(diagonal, up, left);
+      scores[i][j] = minVal;
+
+      if (minVal === diagonal) {
+        moves[i][j] = "diag";
+      } else if (minVal === up) {
+        moves[i][j] = "up";
+      } else {
+        moves[i][j] = "left";
+      }
+    }
+  }
+
+  const results: Array<{ whisperIndex: number | null; confidence: number }> = Array(
+    n
+  ).fill(null).map(() => ({ whisperIndex: null, confidence: 0 }));
+
+  let i = n;
+  let j = m;
+
+  while (i > 0 || j > 0) {
+    const move = moves[i][j];
+
+    if (move === "diag") {
+      const lNorm = lyricTokens[i - 1].normalized;
+      const wNorm = normalizeToken(whisperWords[j - 1].word);
+      const subCost = substitutionCost(lNorm, wNorm);
+
+      if (subCost <= 0.8) {
+        const confidence = Math.max(0, 1 - subCost);
+        results[i - 1] = { whisperIndex: j - 1, confidence };
+      } else {
+        results[i - 1] = { whisperIndex: null, confidence: 0.2 };
+      }
+
+      i--;
+      j--;
+    } else if (move === "up") {
+      results[i - 1] = { whisperIndex: null, confidence: 0 };
+      i--;
+    } else {
+      j--;
+    }
+  }
+
+  return results;
+}
+
+function interpolateTimestamps(
+  tokenIndex: number,
+  mapping: Array<{ whisperIndex: number | null; confidence: number }>,
+  whisperWords: GroqWord[]
+): { start: number; end: number; confidence: number; source: "groq" | "interpolated" } {
+  const item = mapping[tokenIndex];
+
+  if (item.whisperIndex !== null && whisperWords[item.whisperIndex]) {
+    const w = whisperWords[item.whisperIndex];
+    return {
+      start: w.start,
+      end: Math.max(w.start + 0.08, w.end),
+      confidence: item.confidence,
+      source: "groq"
+    };
+  }
+
+  let leftIndex = tokenIndex - 1;
+  while (leftIndex >= 0 && mapping[leftIndex].whisperIndex === null) {
+    leftIndex--;
+  }
+
+  let rightIndex = tokenIndex + 1;
+  while (rightIndex < mapping.length && mapping[rightIndex].whisperIndex === null) {
+    rightIndex++;
+  }
+
+  const leftWord =
+    leftIndex >= 0 && mapping[leftIndex].whisperIndex !== null
+      ? whisperWords[mapping[leftIndex].whisperIndex!]
+      : null;
+
+  const rightWord =
+    rightIndex < mapping.length && mapping[rightIndex].whisperIndex !== null
+      ? whisperWords[mapping[rightIndex].whisperIndex!]
+      : null;
+
+  if (leftWord && rightWord) {
+    const missingCount = rightIndex - leftIndex;
+    const pos = tokenIndex - leftIndex;
+    const gapTime = Math.max(0.1, rightWord.start - leftWord.end);
+    const step = gapTime / missingCount;
+    const start = leftWord.end + step * (pos - 1);
+    const duration = Math.max(0.1, step * 0.85);
+
+    return {
+      start: Math.max(0, start),
+      end: start + duration,
+      confidence: 0.4,
+      source: "interpolated"
+    };
+  }
+
+  if (leftWord) {
+    const offset = (tokenIndex - leftIndex) * 0.25;
+    const start = leftWord.end + offset;
+    return {
+      start: Math.max(0, start),
+      end: start + 0.2,
+      confidence: 0.3,
+      source: "interpolated"
+    };
+  }
+
+  if (rightWord) {
+    const offset = (rightIndex - tokenIndex) * 0.25;
+    const start = Math.max(0, rightWord.start - offset);
+    return {
+      start,
+      end: start + 0.2,
+      confidence: 0.3,
+      source: "interpolated"
+    };
+  }
+
+  const start = tokenIndex * 0.3;
+  return {
+    start,
+    end: start + 0.25,
+    confidence: 0.1,
+    source: "interpolated"
+  };
+}
+
+export function alignLyricsToWords(
+  rawLyrics: string,
+  whisperWords: GroqWord[],
+  beats: number[] = []
+): LyricSegment[] {
+  const lines = rawLyrics
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) throw new Error("No lyric lines provided for alignment.");
+  if (!whisperWords.length) throw new Error("No whisper transcription words provided for alignment.");
+
+  const lyricTokens = tokenizeLyrics(lines);
+  const rawMapping = globalDPAlign(lyricTokens, whisperWords);
+
+  const segments: LyricSegment[] = [];
+
+  for (let lIdx = 0; lIdx < lines.length; lIdx++) {
+    const lineText = lines[lIdx];
+    const lineTokenIndices = lyricTokens
+      .map((t, idx) => ({ token: t, idx }))
+      .filter(({ token }) => token.lineIndex === lIdx);
+
+    const timedWords: TimedWord[] = [];
+    let lastTime = 0;
+
+    for (const { token, idx } of lineTokenIndices) {
+      const timing = interpolateTimestamps(idx, rawMapping, whisperWords);
+      const start = Math.max(lastTime, timing.start);
+      const end = Math.max(start + 0.05, timing.end);
+      lastTime = end;
+
+      timedWords.push({
+        id: crypto.randomUUID(),
+        text: token.original,
+        normalized: token.normalized,
+        start,
+        end,
+        confidence: timing.confidence,
+        source: timing.source
+      });
+    }
+
+    const segStart =
+      timedWords.length > 0
+        ? Math.max(0, Math.min(...timedWords.map((w) => w.start)) - 0.05)
+        : 0;
+
+    const segEnd =
+      timedWords.length > 0
+        ? Math.max(...timedWords.map((w) => w.end)) + 0.1
+        : segStart + 1;
+
+    const avgConfidence =
+      timedWords.length > 0
+        ? timedWords.reduce((acc, w) => acc + w.confidence, 0) / timedWords.length
+        : 0;
+
+    const duration = segEnd - segStart;
+    const beatNearStart = beats.some((b) => Math.abs(b - segStart) < 0.1);
+    const autoAnim = chooseAutoAnimation({
+      text: lineText,
+      duration,
+      alignmentConfidence: avgConfidence,
+      beatNearStart
+    });
+
+    segments.push({
+      id: crypto.randomUUID(),
+      lineIndex: lIdx,
+      text: lineText,
+      start: segStart,
+      end: Math.max(segStart + 0.2, segEnd),
+      words: timedWords,
+      alignmentConfidence: avgConfidence,
+      needsReview: avgConfidence < 0.5,
+      animationMode: "auto",
+      animation: autoAnim,
+      animationIntensity: 1.0
+    });
+  }
+
+  for (let s = 1; s < segments.length; s++) {
+    if (segments[s].start < segments[s - 1].start) {
+      segments[s].start = segments[s - 1].start + 0.1;
+      if (segments[s].end <= segments[s].start) {
+        segments[s].end = segments[s].start + 1.0;
+      }
+    }
+  }
+
+  return segments;
+}
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 01:05:11
 FILE PATH: src/lib/auto-animation.ts
 ACTION: Created

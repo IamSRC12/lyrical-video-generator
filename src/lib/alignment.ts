@@ -1,4 +1,5 @@
 import type { GroqWord } from "@/services/groq";
+import { chooseAutoAnimation } from "./auto-animation";
 import type { LyricSegment, TimedWord } from "./editor-schema";
 
 type LyricToken = {
@@ -10,7 +11,7 @@ type LyricToken = {
 function normalizeToken(value: string): string {
   return value
     .toLocaleLowerCase()
-    .normalize("NFKD")
+    .normalize("NFKC")
     .replace(/\p{Mark}/gu, "")
     .replace(/[^\p{Letter}\p{Number}']/gu, "");
 }
@@ -19,7 +20,7 @@ function tokenizeLyrics(lines: string[]): LyricToken[] {
   return lines.flatMap((line, lineIndex) =>
     line
       .trim()
-      .split(/\s+/)
+      .split(/\s+/u)
       .filter(Boolean)
       .map((original) => ({
         original,
@@ -41,9 +42,9 @@ function levenshteinDistance(a: string, b: string): number {
     for (let j = 1; j <= b.length; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
       current[j] = Math.min(
-        current[j - 1] + 1,      // Insertion
-        previous[j] + 1,          // Deletion
-        previous[j - 1] + cost    // Substitution
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + cost
       );
     }
     previous = current;
@@ -65,10 +66,6 @@ function substitutionCost(lyricNorm: string, whisperNorm: string): number {
   return 1.4;
 }
 
-/**
- * Real Global Dynamic Programming Alignment (Needleman-Wunsch variation).
- * Maps each lyric token to a whisper word index or null.
- */
 function globalDPAlign(
   lyricTokens: LyricToken[],
   whisperWords: GroqWord[]
@@ -120,7 +117,6 @@ function globalDPAlign(
     }
   }
 
-  // Backtrack matrix
   const results: Array<{ whisperIndex: number | null; confidence: number }> = Array(
     n
   ).fill(null).map(() => ({ whisperIndex: null, confidence: 0 }));
@@ -160,7 +156,7 @@ function interpolateTimestamps(
   tokenIndex: number,
   mapping: Array<{ whisperIndex: number | null; confidence: number }>,
   whisperWords: GroqWord[]
-): { start: number; end: number; confidence: number } {
+): { start: number; end: number; confidence: number; source: "groq" | "interpolated" } {
   const item = mapping[tokenIndex];
 
   if (item.whisperIndex !== null && whisperWords[item.whisperIndex]) {
@@ -168,17 +164,16 @@ function interpolateTimestamps(
     return {
       start: w.start,
       end: Math.max(w.start + 0.08, w.end),
-      confidence: item.confidence
+      confidence: item.confidence,
+      source: "groq"
     };
   }
 
-  // Find nearest left mapped token
   let leftIndex = tokenIndex - 1;
   while (leftIndex >= 0 && mapping[leftIndex].whisperIndex === null) {
     leftIndex--;
   }
 
-  // Find nearest right mapped token
   let rightIndex = tokenIndex + 1;
   while (rightIndex < mapping.length && mapping[rightIndex].whisperIndex === null) {
     rightIndex++;
@@ -205,7 +200,8 @@ function interpolateTimestamps(
     return {
       start: Math.max(0, start),
       end: start + duration,
-      confidence: 0.4
+      confidence: 0.4,
+      source: "interpolated"
     };
   }
 
@@ -215,7 +211,8 @@ function interpolateTimestamps(
     return {
       start: Math.max(0, start),
       end: start + 0.2,
-      confidence: 0.3
+      confidence: 0.3,
+      source: "interpolated"
     };
   }
 
@@ -225,7 +222,8 @@ function interpolateTimestamps(
     return {
       start,
       end: start + 0.2,
-      confidence: 0.3
+      confidence: 0.3,
+      source: "interpolated"
     };
   }
 
@@ -233,13 +231,15 @@ function interpolateTimestamps(
   return {
     start,
     end: start + 0.25,
-    confidence: 0.1
+    confidence: 0.1,
+    source: "interpolated"
   };
 }
 
 export function alignLyricsToWords(
   rawLyrics: string,
-  whisperWords: GroqWord[]
+  whisperWords: GroqWord[],
+  beats: number[] = []
 ): LyricSegment[] {
   const lines = rawLyrics
     .split(/\r?\n/)
@@ -252,7 +252,6 @@ export function alignLyricsToWords(
   const lyricTokens = tokenizeLyrics(lines);
   const rawMapping = globalDPAlign(lyricTokens, whisperWords);
 
-  // Group tokens back to lines
   const segments: LyricSegment[] = [];
 
   for (let lIdx = 0; lIdx < lines.length; lIdx++) {
@@ -271,10 +270,13 @@ export function alignLyricsToWords(
       lastTime = end;
 
       timedWords.push({
-        word: token.original,
+        id: crypto.randomUUID(),
+        text: token.original,
+        normalized: token.normalized,
         start,
         end,
-        confidence: timing.confidence
+        confidence: timing.confidence,
+        source: timing.source
       });
     }
 
@@ -290,26 +292,33 @@ export function alignLyricsToWords(
 
     const avgConfidence =
       timedWords.length > 0
-        ? timedWords.reduce((acc, w) => acc + (w.confidence ?? 0), 0) / timedWords.length
+        ? timedWords.reduce((acc, w) => acc + w.confidence, 0) / timedWords.length
         : 0;
 
-    const animations = ["fade", "slide_up", "pop", "neon_pulse", "zoom_blur"] as const;
-    const assignedAnim = animations[lIdx % animations.length];
+    const duration = segEnd - segStart;
+    const beatNearStart = beats.some((b) => Math.abs(b - segStart) < 0.1);
+    const autoAnim = chooseAutoAnimation({
+      text: lineText,
+      duration,
+      alignmentConfidence: avgConfidence,
+      beatNearStart
+    });
 
     segments.push({
       id: crypto.randomUUID(),
-      line: lineText,
+      lineIndex: lIdx,
+      text: lineText,
       start: segStart,
       end: Math.max(segStart + 0.2, segEnd),
       words: timedWords,
-      animation: assignedAnim,
-      animationIntensity: 1.0,
-      confidence: avgConfidence,
-      requiresReview: avgConfidence < 0.5
+      alignmentConfidence: avgConfidence,
+      needsReview: avgConfidence < 0.5,
+      animationMode: "auto",
+      animation: autoAnim,
+      animationIntensity: 1.0
     });
   }
 
-  // Ensure strict monotonic timing across segments
   for (let s = 1; s < segments.length; s++) {
     if (segments[s].start < segments[s - 1].start) {
       segments[s].start = segments[s - 1].start + 0.1;

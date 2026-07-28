@@ -1,52 +1,38 @@
-import {requireUser} from "@/lib/auth-guard";
-import {generateContextualAnimations} from "@/services/opencode";
-import {z} from "zod";
+import { requireAuth } from "@/lib/auth-guard";
+import { lyricSegmentSchema } from "@/lib/editor-schema";
+import { generateDeepSeekAnimations } from "@/services/opencode";
+import { NextResponse } from "next/server";
+import { z } from "zod";
 
-export const runtime = "nodejs";
-
-const schema = z.object({
-  model: z.string().min(1),
-  lines: z
-    .array(z.object({id: z.string(), line: z.string().min(1)}))
-    .min(1)
-    .max(500)
+const requestBodySchema = z.object({
+  segments: z.array(lyricSegmentSchema),
+  bpm: z.number().optional(),
+  moodHint: z.string().optional(),
+  requestId: z.string().optional()
 });
 
 export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
   try {
-    await requireUser();
+    const customKey = request.headers.get("x-opencode-key");
+    const apiKey = customKey || process.env.OPENCODE_API_KEY;
 
-    const apiKey = request.headers.get("x-opencode-key");
+    const body = await request.json();
+    const { segments, bpm, moodHint, requestId } = requestBodySchema.parse(body);
 
-    if (!apiKey) {
-      return Response.json(
-        {message: "OpenCode API key is missing."},
-        {status: 400}
-      );
-    }
-
-    const input = schema.parse(await request.json());
-
-    const animations = await generateContextualAnimations({
+    const result = await generateDeepSeekAnimations({
       apiKey,
-      model: input.model,
-      lines: input.lines
+      segments,
+      bpm,
+      moodHint,
+      requestId
     });
 
-    return Response.json({animations});
+    return NextResponse.json(result);
   } catch (error) {
-    if (error instanceof Response) return error;
-
-    console.error("OpenCode animation error:", error);
-
-    return Response.json(
-      {
-        message:
-          error instanceof Error
-            ? error.message
-            : "Animation generation failed."
-      },
-      {status: 500}
-    );
+    const message = error instanceof Error ? error.message : "DeepSeek AI animation generation failed";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
