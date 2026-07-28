@@ -157,11 +157,11 @@ export function PreviewCanvas() {
 
   const style = project.textStyle;
 
-  const beatPulse = project.toggles.beatSync
-    ? getBeatPulse(project.beats, playhead)
+  const rhythmPulse = project.toggles.beatSync
+    ? getRhythmPulse(project.beats, playhead)
     : 0;
 
-  const beatScale = 1 + beatPulse * 0.045;
+  const rhythmScale = 1 + rhythmPulse * 0.035;
 
   function stopAllPlayback() {
     if (audioRef.current) {
@@ -370,7 +370,7 @@ export function PreviewCanvas() {
             style={{
               left: `${style.positionX}%`,
               top: `${style.positionY}%`,
-              transform: `translate(-50%, -50%) scale(${beatScale}) ${animationStyle?.transform ?? ""}`,
+              transform: `translate(-50%, -50%) scale(${rhythmScale}) ${animationStyle?.transform ?? ""}`,
               opacity: animationStyle?.opacity ?? 1,
               filter: animationStyle?.filter,
               textAlign: style.align,
@@ -392,8 +392,8 @@ export function PreviewCanvas() {
                 textTransform: style.textTransform,
                 color: style.color,
                 textShadow:
-                  beatPulse > 0
-                    ? `${style.shadow}, 0 0 ${18 + beatPulse * 30}px ${
+                  rhythmPulse > 0
+                    ? `${style.shadow}, 0 0 ${12 + rhythmPulse * 20}px ${
                         style.highlightColor
                       }`
                     : animationStyle?.textShadow ?? style.shadow,

@@ -26,7 +26,11 @@ export const lyricSegmentSchema = z.object({
   start: z.number().nonnegative(),
   end: z.number().nonnegative(),
   words: z.array(timedWordSchema),
-  animation: animationSchema.default("fade")
+  animation: animationSchema.default("fade"),
+  confidence: z.number().min(0).max(1).default(1),
+  source: z
+    .enum(["provided", "transcribed", "ai-recovered"])
+    .default("provided")
 });
 
 export type LyricSegment = z.infer<typeof lyricSegmentSchema>;
