@@ -248,7 +248,15 @@ export const useEditorStore = create<EditorState>()(
     }),
     {
       name: "lyrical-project-storage",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() =>
+        typeof window !== "undefined"
+          ? localStorage
+          : ({
+              getItem: () => null,
+              setItem: () => {},
+              removeItem: () => {}
+            } as any)
+      ),
       partialize: (state) => ({
         project: state.project,
         selectedSegmentId: state.selectedSegmentId
