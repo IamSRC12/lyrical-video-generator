@@ -2,6 +2,8 @@
 
 import {useCallback, useEffect, useRef, useState} from "react";
 import {useEditorStore} from "@/stores/editor-store";
+import {Player, CallbackListener, PlayerRef} from "@remotion/player";
+import {LyricalVideoComposition} from "@/remotion/Composition";
 import {
   Clock,
   CornerDownLeft,
@@ -18,9 +20,6 @@ import {
   Volume2,
   VolumeX
 } from "lucide-react";
-import {getActiveSegment, getHighlightedWordIndex} from "@/lib/caption-timing";
-import {getAnimationStyle} from "@/remotion/animations";
-import {getRhythmPulse} from "@/lib/beat-sync";
 import {uploadAsset} from "@/services/asset-client";
 import {toast} from "sonner";
 import {cn} from "@/lib/cn";
@@ -32,11 +31,9 @@ export function PreviewCanvas() {
   const setBackground = useEditorStore((s) => s.setBackground);
   const setAudioUrl = useEditorStore((s) => s.setAudioUrl);
 
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const animationRef = useRef<number | null>(null);
-  const lastTimeRef = useRef<number | null>(null);
+  const playerRef = useRef<PlayerRef>(null);
   const jumpInputRef = useRef<HTMLInputElement>(null);
-  const internalTimeUpdateRef = useRef(false);
+  const internalSeekRef = useRef(false);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPlayingReverse, setIsPlayingReverse] = useState(false);
@@ -47,27 +44,51 @@ export function PreviewCanvas() {
   const [showJumpInput, setShowJumpInput] = useState(false);
   const [jumpInputValue, setJumpInputValue] = useState("");
 
-  // Sync audio currentTime when playhead updates
+  // Sync player position when playhead is changed externally
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !project || internalTimeUpdateRef.current) return;
+    const player = playerRef.current;
+    if (!player || !project || internalSeekRef.current) return;
 
-    if (Math.abs(audio.currentTime - playhead) > 0.15) {
-      audio.currentTime = Math.max(
-        0,
-        Math.min(playhead, audio.duration || project.duration)
-      );
+    const targetFrame = Math.round(playhead * project.fps);
+    const currentFrame = player.getCurrentFrame();
+
+    if (Math.abs(currentFrame - targetFrame) > 1) {
+      player.seekTo(targetFrame);
     }
   }, [playhead, project]);
 
-  // Clean up RAF loop on unmount
+  // Player frame update listener
   useEffect(() => {
-    return () => {
-      if (animationRef.current !== null) {
-        cancelAnimationFrame(animationRef.current);
-      }
+    const player = playerRef.current;
+    if (!player || !project) return;
+
+    const onFrameUpdate: CallbackListener<"frameupdate"> = (e) => {
+      internalSeekRef.current = true;
+      setPlayhead(e.detail.frame / project.fps);
+      queueMicrotask(() => {
+        internalSeekRef.current = false;
+      });
     };
-  }, []);
+
+    const onPlay: CallbackListener<"play"> = () => setIsPlaying(true);
+    const onPause: CallbackListener<"pause"> = () => setIsPlaying(false);
+    const onEnded: CallbackListener<"ended"> = () => {
+      setIsPlaying(false);
+      setPlayhead(project.duration);
+    };
+
+    player.addEventListener("frameupdate", onFrameUpdate);
+    player.addEventListener("play", onPlay);
+    player.addEventListener("pause", onPause);
+    player.addEventListener("ended", onEnded);
+
+    return () => {
+      player.removeEventListener("frameupdate", onFrameUpdate);
+      player.removeEventListener("play", onPlay);
+      player.removeEventListener("pause", onPause);
+      player.removeEventListener("ended", onEnded);
+    };
+  }, [project, setPlayhead]);
 
   // Focus jump input when toggled open
   useEffect(() => {
@@ -128,144 +149,50 @@ export function PreviewCanvas() {
     );
   }
 
-  const activeSegment = getActiveSegment(project.segments, playhead);
-
-  const activeWordIndex = activeSegment
-    ? getHighlightedWordIndex(activeSegment, playhead)
-    : -1;
-
-  const animationProgress = activeSegment
-    ? Math.min(
-        1,
-        Math.max(
-          0,
-          (playhead - activeSegment.start) /
-            Math.max(
-              0.1,
-              Math.min(
-                0.7,
-                (activeSegment.end - activeSegment.start) * 0.3
-              )
-            )
-        )
-      )
-    : 0;
-
-  const animationStyle = activeSegment
-    ? getAnimationStyle(activeSegment.animation, animationProgress)
-    : undefined;
-
-  const style = project.textStyle;
-
-  const rhythmPulse = project.toggles.beatSync
-    ? getRhythmPulse(project.beats, playhead)
-    : 0;
-
-  const rhythmScale = 1 + rhythmPulse * 0.035;
-
-  function stopAllPlayback() {
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    if (animationRef.current !== null) {
-      cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
-    }
-    setIsPlaying(false);
-    setIsPlayingReverse(false);
-    lastTimeRef.current = null;
+  function handleSeek(time: number) {
+    if (!project) return;
+    const safeTime = Math.max(0, Math.min(project.duration, time));
+    setPlayhead(safeTime);
+    playerRef.current?.seekTo(Math.round(safeTime * project.fps));
   }
 
-  function tick() {
-    const audio = audioRef.current;
+  function togglePlay() {
+    const player = playerRef.current;
+    if (!player) return;
 
-    if (!audio || audio.paused || audio.ended) {
-      animationRef.current = null;
-      return;
-    }
-
-    internalTimeUpdateRef.current = true;
-    setPlayhead(audio.currentTime);
-
-    queueMicrotask(() => {
-      internalTimeUpdateRef.current = false;
-    });
-
-    animationRef.current = requestAnimationFrame(tick);
-  }
-
-  async function togglePlay() {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (!audio.paused) {
-      audio.pause();
+    if (player.isPlaying()) {
+      player.pause();
       setIsPlaying(false);
-
-      if (animationRef.current !== null) {
-        cancelAnimationFrame(animationRef.current);
-        animationRef.current = null;
-      }
-      return;
-    }
-
-    const totalDuration = project ? project.duration : 0;
-
-    audio.currentTime = Math.max(
-      0,
-      Math.min(playhead, audio.duration || totalDuration)
-    );
-
-    try {
-      await audio.play();
+    } else {
+      player.play();
       setIsPlaying(true);
-      animationRef.current = requestAnimationFrame(tick);
-    } catch {
-      setIsPlaying(false);
     }
   }
 
   function togglePlayReverse() {
-    const audio = audioRef.current;
-    if (!audio) return;
+    const player = playerRef.current;
+    if (!player || !project) return;
 
     if (isPlayingReverse) {
-      stopAllPlayback();
+      setIsPlayingReverse(false);
+      player.pause();
     } else {
-      stopAllPlayback();
+      player.pause();
       setIsPlayingReverse(true);
-      lastTimeRef.current = performance.now();
 
-      function reverseTick(now: number) {
-        if (lastTimeRef.current !== null) {
-          const delta = (now - lastTimeRef.current) / 1000;
-          lastTimeRef.current = now;
-
-          useEditorStore.setState((state) => {
-            const nextPlayhead = Math.max(0, state.playhead - delta);
-            if (audioRef.current) {
-              audioRef.current.currentTime = nextPlayhead;
-            }
-            if (nextPlayhead <= 0) {
-              stopAllPlayback();
-              return {playhead: 0};
-            }
-            return {playhead: nextPlayhead};
-          });
-
-          animationRef.current = requestAnimationFrame(reverseTick);
+      const interval = setInterval(() => {
+        const currentFrame = player.getCurrentFrame();
+        if (currentFrame <= 0) {
+          clearInterval(interval);
+          setIsPlayingReverse(false);
+          player.seekTo(0);
+          setPlayhead(0);
+        } else {
+          const nextFrame = Math.max(0, currentFrame - 1);
+          player.seekTo(nextFrame);
+          setPlayhead(nextFrame / project.fps);
         }
-      }
-      animationRef.current = requestAnimationFrame(reverseTick);
-    }
-  }
-
-  function handleSeek(time: number) {
-    const duration = project ? project.duration : 0;
-    const safeTime = Math.max(0, Math.min(duration, time));
-    setPlayhead(safeTime);
-    if (audioRef.current) {
-      audioRef.current.currentTime = safeTime;
+      }, 1000 / project.fps);
     }
   }
 
@@ -275,6 +202,18 @@ export function PreviewCanvas() {
 
   function handleRestart() {
     handleSeek(0);
+  }
+
+  function toggleMute() {
+    const player = playerRef.current;
+    if (!player) return;
+    if (isMuted) {
+      player.unmute();
+      setIsMuted(false);
+    } else {
+      player.mute();
+      setIsMuted(true);
+    }
   }
 
   function formatTime(seconds: number): string {
@@ -309,11 +248,15 @@ export function PreviewCanvas() {
     if (!project) return;
     const seconds = parseTimestamp(jumpInputValue);
     if (seconds === null) {
-      toast.error("Invalid timestamp format. Use MM:SS or seconds (e.g. 1:25 or 85)");
+      toast.error(
+        "Invalid timestamp format. Use MM:SS or seconds (e.g. 1:25 or 85)"
+      );
       return;
     }
     if (seconds < 0 || seconds > project.duration) {
-      toast.error(`Timestamp out of range (0:00 - ${formatTime(project.duration)})`);
+      toast.error(
+        `Timestamp out of range (0:00 - ${formatTime(project.duration)})`
+      );
       return;
     }
     handleSeek(seconds);
@@ -321,6 +264,11 @@ export function PreviewCanvas() {
     setShowJumpInput(false);
     setJumpInputValue("");
   }
+
+  const durationInFrames = Math.max(
+    1,
+    Math.ceil(project.duration * project.fps)
+  );
 
   return (
     <div
@@ -348,78 +296,24 @@ export function PreviewCanvas() {
         </div>
       )}
 
-      {/* Preview viewport */}
-      <div
-        className="relative flex flex-1 items-center justify-center overflow-hidden select-none"
-        style={{
-          backgroundColor: project.backgroundColor,
-          backgroundImage: project.backgroundUrl
-            ? `url(${project.backgroundUrl})`
-            : undefined,
-          backgroundSize: "cover",
-          backgroundPosition: "center"
-        }}
-      >
-        {/* Gradient overlay */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30 pointer-events-none" />
-
-        {/* Lyric display */}
-        {activeSegment && (
-          <div
-            className="absolute max-w-[85%] transition-all"
-            style={{
-              left: `${style.positionX}%`,
-              top: `${style.positionY}%`,
-              transform: `translate(-50%, -50%) scale(${rhythmScale}) ${animationStyle?.transform ?? ""}`,
-              opacity: animationStyle?.opacity ?? 1,
-              filter: animationStyle?.filter,
-              textAlign: style.align,
-              backgroundColor: `color-mix(in srgb, ${style.backgroundColor} ${
-                style.backgroundOpacity * 100
-              }%, transparent)`,
-              padding: `${style.paddingY}px ${style.paddingX}px`,
-              borderRadius: `${style.borderRadius}px`,
-              willChange: "transform, opacity, filter"
-            }}
-          >
-            <p
-              style={{
-                fontFamily: style.fontFamily,
-                fontSize: `${Math.min(style.fontSize * 0.55, 76)}px`,
-                fontWeight: style.fontWeight,
-                lineHeight: style.lineHeight,
-                letterSpacing: `${style.letterSpacing * 0.5}px`,
-                textTransform: style.textTransform,
-                color: style.color,
-                textShadow:
-                  rhythmPulse > 0
-                    ? `${style.shadow}, 0 0 ${12 + rhythmPulse * 20}px ${
-                        style.highlightColor
-                      }`
-                    : animationStyle?.textShadow ?? style.shadow,
-                WebkitTextStroke: `${style.outlineWidth * 0.5}px ${style.outlineColor}`,
-                margin: 0
-              }}
-            >
-              {project.toggles.karaokeHighlight
-                ? activeSegment.words.map((word, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        color:
-                          i <= activeWordIndex
-                            ? style.highlightColor
-                            : style.color,
-                        transition: "color 0.08s ease"
-                      }}
-                    >
-                      {word.word}{" "}
-                    </span>
-                  ))
-                : activeSegment.line}
-            </p>
-          </div>
-        )}
+      {/* Preview viewport driven by Remotion Player */}
+      <div className="relative flex flex-1 items-center justify-center overflow-hidden select-none bg-black">
+        <Player
+          ref={playerRef}
+          component={LyricalVideoComposition}
+          inputProps={{project}}
+          durationInFrames={durationInFrames}
+          fps={project.fps}
+          compositionWidth={project.width}
+          compositionHeight={project.height}
+          style={{
+            width: "100%",
+            height: "100%"
+          }}
+          controls={false}
+          clickToPlay={false}
+          spaceKeyToPlay={false}
+        />
       </div>
 
       {/* Interactive Transport & Scrubber Bar */}
@@ -460,10 +354,13 @@ export function PreviewCanvas() {
           <button
             className={cn(
               "button-ghost p-1.5 transition-colors",
-              isPlayingReverse && "bg-violet-500/20 text-violet-400 ring-1 ring-violet-500/40"
+              isPlayingReverse &&
+                "bg-violet-500/20 text-violet-400 ring-1 ring-violet-500/40"
             )}
             onClick={togglePlayReverse}
-            title={isPlayingReverse ? "Pause reverse playback" : "Play backward"}
+            title={
+              isPlayingReverse ? "Pause reverse playback" : "Play backward"
+            }
           >
             <Rewind size={16} />
           </button>
@@ -472,7 +369,8 @@ export function PreviewCanvas() {
           <button
             className={cn(
               "button-ghost p-1.5 transition-colors",
-              isPlaying && "bg-violet-500/20 text-violet-400 ring-1 ring-violet-500/40"
+              isPlaying &&
+                "bg-violet-500/20 text-violet-400 ring-1 ring-violet-500/40"
             )}
             onClick={togglePlay}
             title={isPlaying ? "Pause" : "Play forward"}
@@ -490,10 +388,7 @@ export function PreviewCanvas() {
 
           <button
             className="button-ghost p-1.5"
-            onClick={() => {
-              setIsMuted(!isMuted);
-              if (audioRef.current) audioRef.current.muted = !isMuted;
-            }}
+            onClick={toggleMute}
             title={isMuted ? "Unmute" : "Mute"}
           >
             {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
@@ -503,7 +398,8 @@ export function PreviewCanvas() {
           <button
             className={cn(
               "button-ghost px-2 py-1 flex items-center gap-1.5 text-xs font-medium text-violet-400 transition-colors",
-              showJumpInput && "bg-violet-500/20 text-violet-300 ring-1 ring-violet-500/40"
+              showJumpInput &&
+                "bg-violet-500/20 text-violet-300 ring-1 ring-violet-500/40"
             )}
             onClick={() => {
               setShowJumpInput(!showJumpInput);
@@ -558,24 +454,6 @@ export function PreviewCanvas() {
           </button>
         </div>
       </div>
-
-      {/* Audio element */}
-      <audio
-        ref={audioRef}
-        src={project.audioUrl}
-        preload="auto"
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => {
-          setIsPlaying(false);
-          setPlayhead(project.duration);
-
-          if (animationRef.current !== null) {
-            cancelAnimationFrame(animationRef.current);
-            animationRef.current = null;
-          }
-        }}
-      />
     </div>
   );
 }

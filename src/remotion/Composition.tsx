@@ -1,9 +1,11 @@
-import React from "react";
+import React, {useEffect} from "react";
 import {
   AbsoluteFill,
   Img,
   useCurrentFrame,
-  useVideoConfig
+  useVideoConfig,
+  delayRender,
+  continueRender
 } from "remotion";
 import {Audio} from "@remotion/media";
 import type {EditorProject} from "../lib/editor-schema";
@@ -21,6 +23,26 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const currentTime = frame / fps;
+
+  useEffect(() => {
+    const fontUrl = project.textStyle.fontUrl;
+    if (!fontUrl) return;
+
+    const handle = delayRender("Loading custom font");
+    const fontName = project.textStyle.fontFamily || "CustomFont";
+
+    const font = new FontFace(fontName, `url(${fontUrl})`);
+    font
+      .load()
+      .then((loadedFont) => {
+        document.fonts.add(loadedFont);
+        continueRender(handle);
+      })
+      .catch((err) => {
+        console.error("Failed to load custom font:", err);
+        continueRender(handle);
+      });
+  }, [project.textStyle.fontUrl, project.textStyle.fontFamily]);
 
   const activeSegment = getActiveSegment(project.segments, currentTime);
 
