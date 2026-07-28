@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   CloudUpload,
+  Cpu,
   Eye,
   EyeOff,
   FileAudio,
@@ -17,6 +18,7 @@ import {
   Save,
   Settings,
   Sparkles,
+  Zap,
   XCircle
 } from "lucide-react";
 import {toast} from "sonner";
@@ -29,8 +31,9 @@ import {cn} from "@/lib/cn";
 
 type Stage = "idle" | "uploading" | "transcribing" | "analyzing" | "done";
 type ValidationStatus = "idle" | "testing" | "valid" | "invalid";
+type AiProvider = "opencode" | "nvidia";
 
-const PRESET_MODELS = [
+const OPENCODE_PRESET_MODELS = [
   {id: "deepseek-v4-flash-free", label: "DeepSeek V4 Flash (Free / Default)"},
   {id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet (High Accuracy)"},
   {id: "gpt-4o-mini", label: "GPT-4o Mini (Fast)"},
@@ -38,7 +41,15 @@ const PRESET_MODELS = [
   {id: "custom", label: "Custom Model ID..."}
 ];
 
-async function validateKey(provider: "groq" | "opencode", key: string) {
+const NVIDIA_PRESET_MODELS = [
+  {id: "meta/llama-3.3-70b-instruct", label: "Llama 3.3 70B Instruct (Recommended)"},
+  {id: "nvidia/llama-3.1-nemotron-70b-instruct", label: "Nemotron 70B Instruct"},
+  {id: "mistralai/mistral-large-2-instruct", label: "Mistral Large 2"},
+  {id: "deepseek-ai/deepseek-r1", label: "DeepSeek R1 Reasoning"},
+  {id: "custom", label: "Custom NVIDIA Model ID..."}
+];
+
+async function validateKey(provider: "groq" | "opencode" | "nvidia", key: string) {
   const response = await fetch("/api/keys/validate", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -67,13 +78,27 @@ export function UploadAndAlign() {
   // API & Model Settings State
   const [showSettings, setShowSettings] = useState(false);
   const [groqKey, setGroqKey] = useState("");
+  const [provider, setProvider] = useState<AiProvider>("opencode");
+
+  // OpenCode credentials state
   const [opencodeKey, setOpencodeKey] = useState("");
-  const [selectedModel, setSelectedModel] = useState("deepseek-v4-flash-free");
-  const [customModel, setCustomModel] = useState("");
+  const [opencodeModel, setOpencodeModel] = useState("deepseek-v4-flash-free");
+  const [customOpencodeModel, setCustomOpencodeModel] = useState("");
+
+  // NVIDIA credentials state
+  const [nvidiaKey, setNvidiaKey] = useState("");
+  const [nvidiaModel, setNvidiaModel] = useState("meta/llama-3.3-70b-instruct");
+  const [customNvidiaModel, setCustomNvidiaModel] = useState("");
+
+  // UI state
   const [showGroqKey, setShowGroqKey] = useState(false);
   const [showOpencodeKey, setShowOpencodeKey] = useState(false);
+  const [showNvidiaKey, setShowNvidiaKey] = useState(false);
+
   const [groqStatus, setGroqStatus] = useState<ValidationStatus>("idle");
   const [opencodeStatus, setOpencodeStatus] = useState<ValidationStatus>("idle");
+  const [nvidiaStatus, setNvidiaStatus] = useState<ValidationStatus>("idle");
+
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [hasConfiguredKeys, setHasConfiguredKeys] = useState(false);
 
@@ -82,18 +107,34 @@ export function UploadAndAlign() {
     apiKeyStorage.get().then((saved) => {
       if (saved) {
         setGroqKey(saved.groq || "");
+        setProvider(saved.provider || "opencode");
+
+        // OpenCode saved values
         setOpencodeKey(saved.opencode || "");
-        const isPreset = PRESET_MODELS.some((m) => m.id === saved.opencodeModel);
-        if (isPreset) {
-          setSelectedModel(saved.opencodeModel);
-        } else {
-          setSelectedModel("custom");
-          setCustomModel(saved.opencodeModel);
+        const isOpencodePreset = OPENCODE_PRESET_MODELS.some((m) => m.id === saved.opencodeModel);
+        if (isOpencodePreset) {
+          setOpencodeModel(saved.opencodeModel || "deepseek-v4-flash-free");
+        } else if (saved.opencodeModel) {
+          setOpencodeModel("custom");
+          setCustomOpencodeModel(saved.opencodeModel);
         }
-        if (saved.groq && saved.opencode) {
+
+        // NVIDIA saved values
+        setNvidiaKey(saved.nvidia || "");
+        const isNvidiaPreset = NVIDIA_PRESET_MODELS.some((m) => m.id === saved.nvidiaModel);
+        if (isNvidiaPreset) {
+          setNvidiaModel(saved.nvidiaModel || "meta/llama-3.3-70b-instruct");
+        } else if (saved.nvidiaModel) {
+          setNvidiaModel("custom");
+          setCustomNvidiaModel(saved.nvidiaModel);
+        }
+
+        const activeAiKey = saved.provider === "nvidia" ? saved.nvidia : saved.opencode;
+        if (saved.groq && activeAiKey) {
           setHasConfiguredKeys(true);
           setGroqStatus("valid");
-          setOpencodeStatus("valid");
+          if (saved.provider === "nvidia") setNvidiaStatus("valid");
+          else setOpencodeStatus("valid");
         } else {
           setShowSettings(true);
         }
@@ -122,10 +163,23 @@ export function UploadAndAlign() {
     [handleFile]
   );
 
-  async function testIndividualKey(provider: "groq" | "opencode") {
-    const key = provider === "groq" ? groqKey : opencodeKey;
-    const setStatus = provider === "groq" ? setGroqStatus : setOpencodeStatus;
-    const name = provider === "groq" ? "Groq" : "OpenCode";
+  async function testIndividualKey(target: "groq" | "opencode" | "nvidia") {
+    const key =
+      target === "groq"
+        ? groqKey
+        : target === "nvidia"
+        ? nvidiaKey
+        : opencodeKey;
+
+    const setStatus =
+      target === "groq"
+        ? setGroqStatus
+        : target === "nvidia"
+        ? setNvidiaStatus
+        : setOpencodeStatus;
+
+    const name =
+      target === "groq" ? "Groq" : target === "nvidia" ? "NVIDIA API" : "OpenCode Zen";
 
     if (!key.trim()) {
       toast.error(`Please enter a ${name} API key first.`);
@@ -135,7 +189,7 @@ export function UploadAndAlign() {
     try {
       setStatus("testing");
       toast.info(`Testing ${name} API key...`);
-      await validateKey(provider, key.trim());
+      await validateKey(target, key.trim());
       setStatus("valid");
       await soundManager.beep(720);
       toast.success(`${name} API key is valid & working!`);
@@ -146,34 +200,39 @@ export function UploadAndAlign() {
   }
 
   async function saveSettings(): Promise<boolean> {
-    if (!groqKey.trim() || !opencodeKey.trim()) {
-      toast.error("Both Groq and OpenCode API keys are required.");
+    if (!groqKey.trim()) {
+      toast.error("Groq API key is required for audio transcription.");
       return false;
     }
 
-    const activeModel = selectedModel === "custom" ? customModel.trim() : selectedModel;
-    if (!activeModel) {
-      toast.error("Please specify a valid AI model ID.");
+    const activeAiKey = provider === "nvidia" ? nvidiaKey.trim() : opencodeKey.trim();
+    if (!activeAiKey) {
+      toast.error(`API key is required for ${provider === "nvidia" ? "NVIDIA" : "OpenCode"}.`);
       return false;
     }
+
+    const activeOpencodeModel = opencodeModel === "custom" ? customOpencodeModel.trim() : opencodeModel;
+    const activeNvidiaModel = nvidiaModel === "custom" ? customNvidiaModel.trim() : nvidiaModel;
 
     try {
       setIsSavingSettings(true);
       setGroqStatus("testing");
-      setOpencodeStatus("testing");
+      if (provider === "nvidia") setNvidiaStatus("testing");
+      else setOpencodeStatus("testing");
 
       const results = await Promise.allSettled([
         validateKey("groq", groqKey),
-        validateKey("opencode", opencodeKey)
+        validateKey(provider, activeAiKey)
       ]);
 
       const groqValid = results[0].status === "fulfilled";
-      const opencodeValid = results[1].status === "fulfilled";
+      const aiValid = results[1].status === "fulfilled";
 
       setGroqStatus(groqValid ? "valid" : "invalid");
-      setOpencodeStatus(opencodeValid ? "valid" : "invalid");
+      if (provider === "nvidia") setNvidiaStatus(aiValid ? "valid" : "invalid");
+      else setOpencodeStatus(aiValid ? "valid" : "invalid");
 
-      if (!groqValid || !opencodeValid) {
+      if (!groqValid || !aiValid) {
         const failure = results.find(
           (res): res is PromiseRejectedResult => res.status === "rejected"
         );
@@ -182,13 +241,16 @@ export function UploadAndAlign() {
 
       await apiKeyStorage.set({
         groq: groqKey.trim(),
+        provider,
         opencode: opencodeKey.trim(),
-        opencodeModel: activeModel
+        opencodeModel: activeOpencodeModel || "deepseek-v4-flash-free",
+        nvidia: nvidiaKey.trim(),
+        nvidiaModel: activeNvidiaModel || "meta/llama-3.3-70b-instruct"
       });
 
       await soundManager.beep(720);
       setHasConfiguredKeys(true);
-      toast.success("API keys and model configuration saved successfully!");
+      toast.success(`API keys and ${provider.toUpperCase()} provider settings saved!`);
       return true;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save settings.");
@@ -205,7 +267,7 @@ export function UploadAndAlign() {
     }
 
     let credentials = await apiKeyStorage.get();
-    if (!credentials || !credentials.groq || !credentials.opencode) {
+    if (!credentials || !credentials.groq) {
       toast.info("Please configure and save your API keys first.");
       setShowSettings(true);
       return;
@@ -329,7 +391,7 @@ export function UploadAndAlign() {
             onClick={() => setShowSettings(!showSettings)}
           >
             <Settings size={14} className={cn(showSettings && "animate-spin-once")} />
-            <span>API Keys &amp; AI Model Settings</span>
+            <span>API Keys &amp; AI Provider ({provider === "nvidia" ? "NVIDIA API" : "OpenCode Zen"})</span>
             {hasConfiguredKeys ? (
               <span className="h-2 w-2 rounded-full bg-emerald-400" title="Keys Configured" />
             ) : (
@@ -346,14 +408,48 @@ export function UploadAndAlign() {
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div className="flex items-center gap-2">
               <Key size={18} className="text-violet-400" />
-              <h2 className="text-lg font-bold text-white">API Credentials &amp; Model Setup</h2>
+              <h2 className="text-lg font-bold text-white">API Credentials &amp; AI Provider Setup</h2>
             </div>
             <span className="text-xs text-slate-400">
               Encrypted locally in browser
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Provider Option Selector: OpenCode vs NVIDIA */}
+          <div className="space-y-2">
+            <label className="label text-xs">AI Animation Provider Option</label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                className={cn(
+                  "flex items-center justify-center gap-2 p-3 rounded-lg border text-xs font-bold transition-all",
+                  provider === "opencode"
+                    ? "border-violet-500 bg-violet-500/15 text-white ring-1 ring-violet-500/40"
+                    : "border-white/10 bg-black/40 text-slate-400 hover:border-white/20 hover:text-slate-200"
+                )}
+                onClick={() => setProvider("opencode")}
+              >
+                <Zap size={16} className={provider === "opencode" ? "text-violet-400" : "text-slate-500"} />
+                <span>OpenCode Zen API</span>
+              </button>
+
+              <button
+                type="button"
+                className={cn(
+                  "flex items-center justify-center gap-2 p-3 rounded-lg border text-xs font-bold transition-all",
+                  provider === "nvidia"
+                    ? "border-emerald-500 bg-emerald-500/15 text-white ring-1 ring-emerald-500/40"
+                    : "border-white/10 bg-black/40 text-slate-400 hover:border-white/20 hover:text-slate-200"
+                )}
+                onClick={() => setProvider("nvidia")}
+              >
+                <Cpu size={16} className={provider === "nvidia" ? "text-emerald-400" : "text-slate-500"} />
+                <span>NVIDIA NIM API</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-white/5 pt-4">
             {/* Groq Key Input */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -403,81 +499,164 @@ export function UploadAndAlign() {
               </button>
             </div>
 
-            {/* OpenCode Key Input */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="label text-xs">OpenCode Zen API Key (AI Animations)</label>
-                {opencodeStatus === "valid" && (
-                  <span className="text-emerald-400 text-[10px] flex items-center gap-1">
-                    <CheckCircle2 size={12} /> Valid
-                  </span>
-                )}
-                {opencodeStatus === "invalid" && (
-                  <span className="text-red-400 text-[10px] flex items-center gap-1">
-                    <XCircle size={12} /> Invalid
-                  </span>
-                )}
-              </div>
-              <div className="relative">
-                <input
-                  type={showOpencodeKey ? "text" : "password"}
-                  className="input pr-9 text-xs font-mono"
-                  placeholder="sk-..."
-                  value={opencodeKey}
-                  onChange={(e) => {
-                    setOpencodeKey(e.target.value);
-                    setOpencodeStatus("idle");
-                  }}
-                />
+            {/* AI Provider Key Input depending on option selection */}
+            {provider === "opencode" ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="label text-xs">OpenCode Zen API Key</label>
+                  {opencodeStatus === "valid" && (
+                    <span className="text-emerald-400 text-[10px] flex items-center gap-1">
+                      <CheckCircle2 size={12} /> Valid
+                    </span>
+                  )}
+                  {opencodeStatus === "invalid" && (
+                    <span className="text-red-400 text-[10px] flex items-center gap-1">
+                      <XCircle size={12} /> Invalid
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type={showOpencodeKey ? "text" : "password"}
+                    className="input pr-9 text-xs font-mono"
+                    placeholder="sk-..."
+                    value={opencodeKey}
+                    onChange={(e) => {
+                      setOpencodeKey(e.target.value);
+                      setOpencodeStatus("idle");
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white"
+                    onClick={() => setShowOpencodeKey(!showOpencodeKey)}
+                  >
+                    {showOpencodeKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
                 <button
                   type="button"
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white"
-                  onClick={() => setShowOpencodeKey(!showOpencodeKey)}
+                  className="button-ghost px-2.5 py-1 text-xs text-violet-400 hover:bg-violet-500/10 flex items-center gap-1.5"
+                  disabled={opencodeStatus === "testing" || !opencodeKey}
+                  onClick={() => testIndividualKey("opencode")}
                 >
-                  {showOpencodeKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {opencodeStatus === "testing" ? (
+                    <LoaderCircle size={13} className="animate-spin" />
+                  ) : (
+                    <FlaskConical size={13} />
+                  )}
+                  <span>Test OpenCode Key</span>
                 </button>
               </div>
-              <button
-                type="button"
-                className="button-ghost px-2.5 py-1 text-xs text-violet-400 hover:bg-violet-500/10 flex items-center gap-1.5"
-                disabled={opencodeStatus === "testing" || !opencodeKey}
-                onClick={() => testIndividualKey("opencode")}
-              >
-                {opencodeStatus === "testing" ? (
-                  <LoaderCircle size={13} className="animate-spin" />
-                ) : (
-                  <FlaskConical size={13} />
-                )}
-                <span>Test OpenCode Key</span>
-              </button>
-            </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="label text-xs">NVIDIA API Key</label>
+                  {nvidiaStatus === "valid" && (
+                    <span className="text-emerald-400 text-[10px] flex items-center gap-1">
+                      <CheckCircle2 size={12} /> Valid
+                    </span>
+                  )}
+                  {nvidiaStatus === "invalid" && (
+                    <span className="text-red-400 text-[10px] flex items-center gap-1">
+                      <XCircle size={12} /> Invalid
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type={showNvidiaKey ? "text" : "password"}
+                    className="input pr-9 text-xs font-mono"
+                    placeholder="nvapi-..."
+                    value={nvidiaKey}
+                    onChange={(e) => {
+                      setNvidiaKey(e.target.value);
+                      setNvidiaStatus("idle");
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white"
+                    onClick={() => setShowNvidiaKey(!showNvidiaKey)}
+                  >
+                    {showNvidiaKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="button-ghost px-2.5 py-1 text-xs text-emerald-400 hover:bg-emerald-500/10 flex items-center gap-1.5"
+                  disabled={nvidiaStatus === "testing" || !nvidiaKey}
+                  onClick={() => testIndividualKey("nvidia")}
+                >
+                  {nvidiaStatus === "testing" ? (
+                    <LoaderCircle size={13} className="animate-spin" />
+                  ) : (
+                    <FlaskConical size={13} />
+                  )}
+                  <span>Test NVIDIA Key</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Model Selector */}
+          {/* Model Selector depending on option selection */}
           <div className="space-y-1.5 border-t border-white/5 pt-4">
-            <label className="label text-xs">AI Animation Model</label>
-            <select
-              className="input text-xs cursor-pointer"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-            >
-              {PRESET_MODELS.map((m) => (
-                <option key={m.id} value={m.id} className="bg-slate-900 text-white">
-                  {m.label}
-                </option>
-              ))}
-            </select>
+            <label className="label text-xs font-semibold">
+              {provider === "nvidia" ? "NVIDIA NIM Model" : "OpenCode Zen Model"}
+            </label>
 
-            {selectedModel === "custom" && (
-              <div className="mt-2">
-                <input
-                  type="text"
-                  className="input text-xs font-mono"
-                  placeholder="e.g. deepseek-v4-flash-free or gpt-4o"
-                  value={customModel}
-                  onChange={(e) => setCustomModel(e.target.value)}
-                />
-              </div>
+            {provider === "opencode" ? (
+              <>
+                <select
+                  className="input text-xs cursor-pointer"
+                  value={opencodeModel}
+                  onChange={(e) => setOpencodeModel(e.target.value)}
+                >
+                  {OPENCODE_PRESET_MODELS.map((m) => (
+                    <option key={m.id} value={m.id} className="bg-slate-900 text-white">
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+
+                {opencodeModel === "custom" && (
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      className="input text-xs font-mono"
+                      placeholder="e.g. deepseek-v4-flash-free or gpt-4o"
+                      value={customOpencodeModel}
+                      onChange={(e) => setCustomOpencodeModel(e.target.value)}
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <select
+                  className="input text-xs cursor-pointer"
+                  value={nvidiaModel}
+                  onChange={(e) => setNvidiaModel(e.target.value)}
+                >
+                  {NVIDIA_PRESET_MODELS.map((m) => (
+                    <option key={m.id} value={m.id} className="bg-slate-900 text-white">
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+
+                {nvidiaModel === "custom" && (
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      className="input text-xs font-mono"
+                      placeholder="e.g. meta/llama-3.3-70b-instruct"
+                      value={customNvidiaModel}
+                      onChange={(e) => setCustomNvidiaModel(e.target.value)}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -486,7 +665,11 @@ export function UploadAndAlign() {
             <button
               type="button"
               className="button-primary text-xs px-4 py-2"
-              disabled={isSavingSettings || !groqKey || !opencodeKey}
+              disabled={
+                isSavingSettings ||
+                !groqKey ||
+                (provider === "nvidia" ? !nvidiaKey : !opencodeKey)
+              }
               onClick={async () => {
                 const ok = await saveSettings();
                 if (ok) setShowSettings(false);

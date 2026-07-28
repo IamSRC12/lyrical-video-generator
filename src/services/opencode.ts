@@ -31,7 +31,7 @@ function extractJson(value: string): string {
   const end = cleaned.lastIndexOf("}");
 
   if (start === -1 || end === -1 || end <= start) {
-    throw new Error("OpenCode did not return a JSON object.");
+    throw new Error("AI model did not return a JSON object.");
   }
 
   return cleaned.slice(start, end + 1);
@@ -40,60 +40,64 @@ function extractJson(value: string): string {
 export async function generateContextualAnimations(options: {
   apiKey: string;
   model: string;
+  provider?: "opencode" | "nvidia";
   lines: Array<{id: string; line: string}>;
 }) {
-  const response = await fetch(
-    "https://opencode.ai/zen/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${options.apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: options.model,
-        temperature: 0.1,
-        max_tokens: 2500,
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You are selecting typography entrance animations for a lyrical video.",
-              "Read the whole song in order and use the previous and next lines as context.",
-              "Do not force variety. Repeating the same animation is correct when the emotion stays consistent.",
-              "",
-              "Animation rules:",
-              "- fade: calm, intimate, reflective, neutral, soft or uncertain lines.",
-              "- slide_up: hopeful, rising, moving forward, uplifting or building lines.",
-              "- pop: joyful, playful, catchy, confident or strongly accented words.",
-              "- neon_pulse: electric, nightlife, dreamy, romantic, futuristic or energetic lines.",
-              "- zoom_blur: memory, confusion, longing, distance, dreams or surreal imagery.",
-              "- rain: sadness, grief, loneliness, tears, loss or explicit rain imagery only.",
-              "- shake: anger, fear, violence, panic, impact or extreme intensity only.",
-              "",
-              "Prefer fade when meaning is ambiguous.",
-              "Do not use rain merely because a line is slow.",
-              "Do not use shake unless the line is genuinely intense.",
-              "Return exactly one result for every supplied ID.",
-              "Preserve IDs exactly.",
-              "Return JSON only:",
-              '{"animations":[{"id":"original-id","animation":"fade"}]}'
-            ].join("\n")
-          },
-          {
-            role: "user",
-            content: JSON.stringify(options.lines)
-          }
-        ]
-      }),
-      cache: "no-store",
-      signal: AbortSignal.timeout(60_000)
-    }
-  );
+  const provider = options.provider ?? "opencode";
+  const endpoint =
+    provider === "nvidia"
+      ? "https://integrate.api.nvidia.com/v1/chat/completions"
+      : "https://opencode.ai/zen/v1/chat/completions";
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: options.model,
+      temperature: 0.1,
+      max_tokens: 2500,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are selecting typography entrance animations for a lyrical video.",
+            "Read the whole song in order and use the previous and next lines as context.",
+            "Do not force variety. Repeating the same animation is correct when the emotion stays consistent.",
+            "",
+            "Animation rules:",
+            "- fade: calm, intimate, reflective, neutral, soft or uncertain lines.",
+            "- slide_up: hopeful, rising, moving forward, uplifting or building lines.",
+            "- pop: joyful, playful, catchy, confident or strongly accented words.",
+            "- neon_pulse: electric, nightlife, dreamy, romantic, futuristic or energetic lines.",
+            "- zoom_blur: memory, confusion, longing, distance, dreams or surreal imagery.",
+            "- rain: sadness, grief, loneliness, tears, loss or explicit rain imagery only.",
+            "- shake: anger, fear, violence, panic, impact or extreme intensity only.",
+            "",
+            "Prefer fade when meaning is ambiguous.",
+            "Do not use rain merely because a line is slow.",
+            "Do not use shake unless the line is genuinely intense.",
+            "Return exactly one result for every supplied ID.",
+            "Preserve IDs exactly.",
+            "Return JSON only:",
+            '{"animations":[{"id":"original-id","animation":"fade"}]}'
+          ].join("\n")
+        },
+        {
+          role: "user",
+          content: JSON.stringify(options.lines)
+        }
+      ]
+    }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(60_000)
+  });
 
   if (!response.ok) {
     throw new Error(
-      `OpenCode failed (${response.status}): ${(await response.text()).slice(
+      `${provider.toUpperCase()} API failed (${response.status}): ${(await response.text()).slice(
         0,
         400
       )}`
@@ -104,7 +108,7 @@ export async function generateContextualAnimations(options: {
   const content = body.choices[0]?.message.content;
 
   if (!content) {
-    throw new Error("OpenCode returned an empty response.");
+    throw new Error(`${provider.toUpperCase()} returned an empty response.`);
   }
 
   const parsed = rawResultSchema.parse(
