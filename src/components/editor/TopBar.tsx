@@ -1,16 +1,48 @@
 "use client";
 
+import {useState} from "react";
 import {
+  Check,
+  ChevronDown,
   Download,
   Film,
   LoaderCircle,
   Monitor,
-  Sparkles
+  Sparkles,
+  Zap
 } from "lucide-react";
 import {toast} from "sonner";
 import {useEditorStore} from "@/stores/editor-store";
 import {apiKeyStorage} from "@/services/api-keys";
 import {cn} from "@/lib/cn";
+
+type ExportProfile = "draft" | "standard" | "high";
+
+const EXPORT_PROFILES: Array<{
+  id: ExportProfile;
+  label: string;
+  desc: string;
+  badge: string;
+}> = [
+  {
+    id: "draft",
+    label: "Draft",
+    desc: "720p • Faster render",
+    badge: "Quick Preview"
+  },
+  {
+    id: "standard",
+    label: "Standard",
+    desc: "1080p • Crisp balance",
+    badge: "Recommended"
+  },
+  {
+    id: "high",
+    label: "High Quality",
+    desc: "1080p • Highest fidelity",
+    badge: "Final Export"
+  }
+];
 
 export function TopBar() {
   const project = useEditorStore((s) => s.project);
@@ -21,6 +53,9 @@ export function TopBar() {
   const setToggle = useEditorStore((s) => s.setToggle);
   const setSegments = useEditorStore((s) => s.setSegments);
 
+  const [selectedProfile, setSelectedProfile] = useState<ExportProfile>("standard");
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
   if (!project) return null;
 
   const is1080 = project.width === 1920;
@@ -29,22 +64,25 @@ export function TopBar() {
     if (!project) return;
 
     const credentials = await apiKeyStorage.get();
-    if (!credentials) {
-      toast.error("API keys not found. Please setup API keys on onboarding page.");
+    if (!credentials || (!credentials.groq && !credentials.opencode && !credentials.nvidia)) {
+      toast.error("API keys not found. Please setup API keys on the home page settings.");
       return;
     }
 
-    toast.info("Generating contextual animations with OpenCode Zen...");
+    toast.info("Generating contextual animations...");
 
     try {
       const response = await fetch("/api/opencode/animations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-opencode-key": credentials.opencode
+          "x-groq-key": credentials.groq || "",
+          "x-opencode-key": credentials.opencode || "",
+          "x-nvidia-key": credentials.nvidia || ""
         },
         body: JSON.stringify({
-          model: credentials.opencodeModel,
+          provider: credentials.provider || "groq",
+          model: credentials.provider === "nvidia" ? credentials.nvidiaModel : credentials.opencodeModel,
           lines: project.segments.map((segment) => ({
             id: segment.id,
             line: segment.line
@@ -75,16 +113,20 @@ export function TopBar() {
     }
   }
 
-  async function handleExport() {
+  async function handleExport(profile: ExportProfile = selectedProfile) {
     if (!project) return;
 
+    setShowExportMenu(false);
     setExportState(true, 0);
 
     try {
       const response = await fetch("/api/export", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({project})
+        body: JSON.stringify({
+          project,
+          profile
+        })
       });
 
       if (!response.ok) {
@@ -95,10 +137,10 @@ export function TopBar() {
       const result = await response.json();
       setExportState(false, 100);
       toast.success(
-        `Rendered in ${(result.durationMs / 1000).toFixed(1)}s`
+        `Rendered successfully in ${(result.durationMs / 1000).toFixed(1)}s`
       );
 
-      // Programmatic anchor download to prevent popup blocker issues
+      // Programmatic anchor download
       const anchor = document.createElement("a");
       anchor.href = result.url;
       anchor.download = result.outputFilename ?? "lyrical-video.mp4";
@@ -123,7 +165,7 @@ export function TopBar() {
         <span className="badge">{project.fps} FPS</span>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 relative">
         {/* Resolution toggle */}
         <button
           className={cn(
@@ -145,24 +187,73 @@ export function TopBar() {
           AI Animations
         </button>
 
-        {/* Export */}
-        <button
-          className="button-primary text-xs"
-          disabled={isExporting}
-          onClick={handleExport}
-        >
-          {isExporting ? (
-            <>
-              <LoaderCircle size={14} className="animate-spin" />
-              {Math.round(exportProgress)}%
-            </>
-          ) : (
-            <>
-              <Download size={14} />
-              Export MP4
-            </>
+        {/* Export Button & Menu Dropdown */}
+        <div className="relative">
+          <div className="inline-flex rounded-lg overflow-hidden border border-violet-500/40">
+            <button
+              className="button-primary text-xs rounded-r-none border-r border-violet-600/40"
+              disabled={isExporting}
+              onClick={() => handleExport(selectedProfile)}
+            >
+              {isExporting ? (
+                <>
+                  <LoaderCircle size={14} className="animate-spin" />
+                  Rendering...
+                </>
+              ) : (
+                <>
+                  <Download size={14} />
+                  Export MP4 ({selectedProfile.toUpperCase()})
+                </>
+              )}
+            </button>
+
+            <button
+              className="button-primary px-2 rounded-l-none"
+              disabled={isExporting}
+              onClick={() => setShowExportMenu(!showExportMenu)}
+              title="Select export profile"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+
+          {/* Export Profiles Dropdown */}
+          {showExportMenu && (
+            <div className="absolute right-0 top-11 z-50 w-64 rounded-xl border border-white/10 bg-slate-900/95 p-2 shadow-2xl backdrop-blur-md animate-fade-in space-y-1">
+              <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-white/5">
+                Export Quality Profile
+              </div>
+
+              {EXPORT_PROFILES.map((p) => (
+                <button
+                  key={p.id}
+                  className={cn(
+                    "w-full text-left p-2.5 rounded-lg flex items-center justify-between text-xs transition-colors",
+                    selectedProfile === p.id
+                      ? "bg-violet-500/15 border border-violet-500/30 text-white"
+                      : "hover:bg-white/5 text-slate-300"
+                  )}
+                  onClick={() => {
+                    setSelectedProfile(p.id);
+                    handleExport(p.id);
+                  }}
+                >
+                  <div>
+                    <div className="font-bold flex items-center gap-1.5">
+                      <span>{p.label}</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-white/10 text-slate-300">
+                        {p.badge}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">{p.desc}</p>
+                  </div>
+                  {selectedProfile === p.id && <Check size={14} className="text-violet-400" />}
+                </button>
+              ))}
+            </div>
           )}
-        </button>
+        </div>
       </div>
     </header>
   );
