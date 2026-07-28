@@ -7,6 +7,11 @@ type LyricToken = {
   lineIndex: number;
 };
 
+type TokenTime = {
+  start: number;
+  end: number;
+};
+
 function normalize(value: string): string {
   return value
     .toLocaleLowerCase()
@@ -143,91 +148,133 @@ function globalAlign(
   return mapping;
 }
 
-function estimateTokenTime(
-  tokenIndex: number,
+function estimateAllTokenTimes(
   mapping: Array<number | null>,
-  words: GroqWord[]
-): {start: number; end: number} {
-  const mapped = mapping[tokenIndex];
+  words: GroqWord[],
+  audioDuration: number
+): TokenTime[] {
+  const result: Array<TokenTime | null> = mapping.map((mappedIndex) => {
+    if (mappedIndex === null) return null;
 
-  if (mapped !== null) {
-    return {
-      start: words[mapped].start,
-      end: words[mapped].end
-    };
-  }
-
-  let previousToken = tokenIndex - 1;
-  let nextToken = tokenIndex + 1;
-
-  while (previousToken >= 0 && mapping[previousToken] === null) {
-    previousToken--;
-  }
-
-  while (nextToken < mapping.length && mapping[nextToken] === null) {
-    nextToken++;
-  }
-
-  const previousWord =
-    previousToken >= 0 && mapping[previousToken] !== null
-      ? words[mapping[previousToken]!]
-      : undefined;
-
-  const nextWord =
-    nextToken < mapping.length && mapping[nextToken] !== null
-      ? words[mapping[nextToken]!]
-      : undefined;
-
-  if (previousWord && nextWord) {
-    const missingCount = nextToken - previousToken;
-    const position = tokenIndex - previousToken;
-    const step = (nextWord.start - previousWord.end) / missingCount;
-    const start = previousWord.end + step * (position - 1);
+    const word = words[mappedIndex];
 
     return {
-      start,
-      end: Math.max(start + 0.08, start + Math.max(step * 0.8, 0.08))
+      start: Math.max(0, word.start),
+      end: Math.max(word.start + 0.02, word.end)
     };
+  });
+
+  let cursor = 0;
+
+  while (cursor < result.length) {
+    if (result[cursor]) {
+      cursor++;
+      continue;
+    }
+
+    const runStart = cursor;
+
+    while (cursor < result.length && result[cursor] === null) {
+      cursor++;
+    }
+
+    const runEnd = cursor;
+    const count = runEnd - runStart;
+
+    const previous =
+      runStart > 0 ? result[runStart - 1] : null;
+
+    const next =
+      runEnd < result.length ? result[runEnd] : null;
+
+    let leftBoundary = previous?.end ?? 0;
+    let rightBoundary = next?.start ?? audioDuration;
+
+    if (!Number.isFinite(rightBoundary) || rightBoundary <= leftBoundary) {
+      rightBoundary = leftBoundary + count * 0.18;
+    }
+
+    const available = Math.max(
+      count * 0.03,
+      rightBoundary - leftBoundary
+    );
+
+    const slotDuration = available / count;
+
+    for (let index = 0; index < count; index++) {
+      const start = leftBoundary + slotDuration * index;
+      const end = Math.min(
+        rightBoundary,
+        start + Math.max(0.03, slotDuration * 0.82)
+      );
+
+      result[runStart + index] = {
+        start,
+        end: Math.max(start + 0.02, end)
+      };
+    }
   }
 
-  if (previousWord) {
-    const start = previousWord.end + 0.05 * (tokenIndex - previousToken);
-    return {start, end: start + 0.16};
-  }
-
-  if (nextWord) {
-    const distance = nextToken - tokenIndex;
-    const end = Math.max(0.1, nextWord.start - 0.05 * distance);
-    return {start: Math.max(0, end - 0.16), end};
-  }
-
-  const start = tokenIndex * 0.25;
-  return {start, end: start + 0.2};
+  return result.map(
+    (time, index) =>
+      time ?? {
+        start: (index / Math.max(1, result.length)) * audioDuration,
+        end:
+          ((index + 0.8) / Math.max(1, result.length)) *
+          audioDuration
+      }
+  );
 }
 
 export function alignLyricsToWords(
   rawLyrics: string,
-  whisperWords: GroqWord[]
+  whisperWords: GroqWord[],
+  suppliedDuration?: number
 ): LyricSegment[] {
+  const validWords = whisperWords
+    .filter(
+      (word) =>
+        word.word.trim() &&
+        Number.isFinite(word.start) &&
+        Number.isFinite(word.end) &&
+        word.start >= 0 &&
+        word.end >= word.start
+    )
+    .sort((a, b) => a.start - b.start);
+
+  if (!validWords.length) {
+    throw new Error("No valid timed words were returned.");
+  }
+
+  const audioDuration = Math.max(
+    suppliedDuration ?? 0,
+    validWords.at(-1)?.end ?? 0,
+    1
+  );
+
   const lines = rawLyrics
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
   if (!lines.length) throw new Error("No lyric lines were provided.");
-  if (!whisperWords.length) throw new Error("No timed words were returned.");
 
   const lyricTokens = tokenizeLyrics(lines);
-  const mapping = globalAlign(lyricTokens, whisperWords);
+  const mapping = globalAlign(lyricTokens, validWords);
+  const tokenTimes = estimateAllTokenTimes(
+    mapping,
+    validWords,
+    audioDuration
+  );
 
-  return lines.map((line, lineIndex) => {
+  const segments = lines.map((line, lineIndex) => {
     const indexedTokens = lyricTokens
       .map((token, index) => ({token, index}))
       .filter(({token}) => token.lineIndex === lineIndex);
 
     const words: TimedWord[] = indexedTokens.map(({token, index}) => ({
       word: token.original,
-      ...estimateTokenTime(index, mapping, whisperWords)
+      ...tokenTimes[index]
     }));
 
     const start =
@@ -249,4 +296,18 @@ export function alignLyricsToWords(
       animation: lineIndex % 3 === 0 ? "pop" : "fade"
     };
   });
+
+  segments.sort((a, b) => a.start - b.start);
+
+  for (let index = 0; index < segments.length - 1; index++) {
+    const current = segments[index];
+    const next = segments[index + 1];
+
+    current.end = Math.min(
+      Math.max(current.start + 0.1, current.end),
+      Math.max(current.start + 0.1, next.start - 0.01)
+    );
+  }
+
+  return segments;
 }

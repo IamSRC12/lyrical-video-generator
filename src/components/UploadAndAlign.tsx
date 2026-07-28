@@ -90,14 +90,23 @@ export function UploadAndAlign() {
       const transcription = await transcriptionResponse.json();
       setProgress(70);
 
+      if (transcription.removedLines?.length) {
+        toast.info(
+          `Removed ${transcription.removedLines.length} lyric headings: ` +
+            transcription.removedLines.slice(0, 4).join(", ")
+        );
+      }
+
       // Step 3: Beat detection
       setStage("analyzing");
       setProgress(80);
 
       let beats: number[] = [];
+      let decodedDuration = 0;
       try {
         const beatResult = await detectBeats(audioFile);
         beats = beatResult.beats;
+        decodedDuration = beatResult.duration;
         toast.success(`Detected ~${beatResult.bpm} BPM`);
       } catch {
         toast.warning("Beat detection was not available for this file.");
@@ -105,10 +114,18 @@ export function UploadAndAlign() {
 
       setProgress(95);
 
+      const finalSegmentEnd =
+        transcription.segments.at(-1)?.end ?? 0;
+
       // Step 4: Create project
       const project = createProject({
         audioUrl,
-        duration: transcription.duration,
+        duration: Math.max(
+          decodedDuration,
+          transcription.duration,
+          finalSegmentEnd,
+          1
+        ),
         segments: transcription.segments,
         beats
       });
