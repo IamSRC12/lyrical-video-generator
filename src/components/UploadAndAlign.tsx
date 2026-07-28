@@ -1,6 +1,6 @@
 "use client";
 
-import { defaultTextStyle, type EditorProject, type LyricSegment } from "@/lib/editor-schema";
+import { defaultTextStyle, type AnimationName, type EditorProject, type LyricSegment } from "@/lib/editor-schema";
 import { getStoredGroqKey, getStoredOpencodeKey } from "@/services/api-keys";
 import { useEditorStore } from "@/stores/editor-store";
 import { Activity, Key, Music, Sparkles, Upload, Wand2 } from "lucide-react";
@@ -153,7 +153,9 @@ export function UploadAndAlign() {
           if (aiRes.ok) {
             const aiData = await aiRes.json();
             if (aiData.suggestions?.length) {
-              const sugMap = new Map(aiData.suggestions.map((s: any) => [s.segmentId, s]));
+              const sugMap = new Map<string, { segmentId: string; animation: AnimationName; intensity?: number }>(
+                aiData.suggestions.map((s: any) => [s.segmentId, s])
+              );
               segments = segments.map((seg) => {
                 const sug = sugMap.get(seg.id);
                 if (sug) {
