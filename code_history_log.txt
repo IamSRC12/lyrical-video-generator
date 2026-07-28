@@ -1,4 +1,760 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 00:22:43
+FILE PATH: src/components/editor/EditorWorkspace.tsx
+ACTION: Created
+================================================================================
+"use client";
+
+import { soundManager } from "@/services/sound-manager";
+import { useEditorStore } from "@/stores/editor-store";
+import { ArrowLeft, Play, Pause, RotateCcw, RotateCw, Volume2 } from "lucide-react";
+import { useEffect } from "react";
+import { LeftPanel } from "./LeftPanel";
+import { PreviewCanvas } from "./PreviewCanvas";
+import { Timeline } from "./Timeline";
+import { Waveform } from "./Waveform";
+
+export function EditorWorkspace() {
+  const project = useEditorStore((s) => s.project);
+  const setProject = useEditorStore((s) => s.setProject);
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
+  const isPlaying = useEditorStore((s) => s.isPlaying);
+  const togglePlay = useEditorStore((s) => s.togglePlay);
+  const undo = useEditorStore((s) => s.undo);
+  const redo = useEditorStore((s) => s.redo);
+
+  // Initialize sound manager when project loads
+  useEffect(() => {
+    if (!project?.audioUrl) return;
+
+    soundManager.init(project.audioUrl);
+    soundManager.onTimeUpdate((time) => {
+      setCurrentTime(time);
+    });
+    soundManager.onEnded(() => {
+      useEditorStore.getState().setIsPlaying(false);
+    });
+
+    return () => {
+      soundManager.destroy();
+    };
+  }, [project?.audioUrl, setCurrentTime]);
+
+  // Sync sound manager playback with store state
+  useEffect(() => {
+    if (isPlaying) {
+      soundManager.play();
+    } else {
+      soundManager.pause();
+    }
+  }, [isPlaying]);
+
+  // Sync sound manager position when currentTime changes
+  useEffect(() => {
+    soundManager.seek(currentTime);
+  }, [currentTime]);
+
+  if (!project) return null;
+
+  return (
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100 select-none">
+      {/* Top Navigation Bar */}
+      <header className="flex h-14 w-full shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-900/90 px-4 backdrop-blur-md">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setProject(null as any)}
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-zinc-400 hover:border-zinc-700 hover:text-white"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>New Project</span>
+          </button>
+          <span className="h-4 w-px bg-zinc-800" />
+          <h1 className="text-sm font-bold text-white truncate max-w-xs">{project.title}</h1>
+        </div>
+
+        {/* Global Playback & History Controls */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={undo}
+              title="Undo"
+              className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+            >
+              <RotateCcw className="h-4 w-4" />
+            </button>
+            <button
+              onClick={redo}
+              title="Redo"
+              className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+            >
+              <RotateCw className="h-4 w-4" />
+            </button>
+          </div>
+
+          <button
+            onClick={togglePlay}
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-4 py-1.5 text-xs font-bold text-zinc-950 shadow-md shadow-yellow-500/20 hover:brightness-110"
+          >
+            {isPlaying ? <Pause className="h-4 w-4 fill-zinc-950" /> : <Play className="h-4 w-4 fill-zinc-950" />}
+            <span>{isPlaying ? "Pause" : "Play"}</span>
+          </button>
+
+          <div className="flex items-center gap-2 rounded-lg bg-zinc-950 px-3 py-1 font-mono text-xs text-yellow-400 border border-zinc-850">
+            <span>{currentTime.toFixed(2)}s</span>
+            <span className="text-zinc-600">/</span>
+            <span className="text-zinc-400">{project.duration.toFixed(2)}s</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-zinc-400">
+          <Volume2 className="h-4 w-4 text-zinc-500" />
+          <span>{project.fps} FPS</span>
+        </div>
+      </header>
+
+      {/* Main Workspace Layout */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left Control Panel */}
+        <LeftPanel />
+
+        {/* Right Editor Content (Preview + Timeline) */}
+        <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950">
+          {/* Top Video Preview Canvas */}
+          <div className="flex-1 overflow-hidden p-4 flex items-center justify-center bg-zinc-950/80">
+            <PreviewCanvas />
+          </div>
+
+          {/* Bottom Audio Waveform & Timeline Track */}
+          <div className="h-72 border-t border-zinc-800 bg-zinc-900/50 flex flex-col shrink-0">
+            <Waveform />
+            <Timeline />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:22:33
+FILE PATH: src/components/UploadAndAlign.tsx
+ACTION: Created
+================================================================================
+"use client";
+
+import { defaultTextStyle, type EditorProject, type LyricSegment } from "@/lib/editor-schema";
+import { getStoredGroqKey, getStoredNvidiaKey } from "@/services/api-keys";
+import { useEditorStore } from "@/stores/editor-store";
+import { Activity, Key, Music, Sparkles, Upload, Wand2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
+import { ApiKeyOnboarding } from "./ApiKeyOnboarding";
+
+type ProcessingStage =
+  | "idle"
+  | "uploading"
+  | "transcribing"
+  | "aligning"
+  | "beat_detection"
+  | "ai_animation"
+  | "ready";
+
+export function UploadAndAlign() {
+  const setProject = useEditorStore((s) => s.setProject);
+
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [lyricsText, setLyricsText] = useState("");
+  const [stage, setStage] = useState<ProcessingStage>("idle");
+  const [stageProgress, setStageProgress] = useState(0);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("audio/") && !file.name.match(/\.(mp3|wav|m4a|aac|ogg)$/i)) {
+      toast.error("Please upload a valid audio file (MP3, WAV, M4A, AAC, OGG).");
+      return;
+    }
+
+    if (file.size > 50 * 1024 * 1024) {
+      toast.error("Audio file size must not exceed 50MB.");
+      return;
+    }
+
+    setAudioFile(file);
+    toast.success(`Loaded "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB)`);
+  };
+
+  const handleProcess = async () => {
+    if (!audioFile) {
+      toast.error("Please select an audio file.");
+      return;
+    }
+    if (!lyricsText.trim()) {
+      toast.error("Please enter or paste the song lyrics.");
+      return;
+    }
+    if (stage !== "idle" && stage !== "ready") return;
+
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    try {
+      // 1. Upload audio file asset
+      setStage("uploading");
+      setStageProgress(15);
+
+      const assetFormData = new FormData();
+      assetFormData.append("file", audioFile);
+
+      const uploadRes = await fetch("/api/assets", {
+        method: "POST",
+        body: assetFormData,
+        signal
+      });
+
+      if (!uploadRes.ok) {
+        const errJson = await uploadRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `Upload failed (HTTP ${uploadRes.status})`);
+      }
+
+      const assetData = await uploadRes.json();
+      const audioUrl = assetData.url;
+
+      // Retrieve encrypted API keys
+      const groqKey = await getStoredGroqKey();
+      const nvidiaKey = await getStoredNvidiaKey();
+
+      // 2. Transcribe & Align via Server API
+      setStage("transcribing");
+      setStageProgress(35);
+
+      const transFormData = new FormData();
+      transFormData.append("file", audioFile);
+      transFormData.append("lyrics", lyricsText);
+
+      const headers: Record<string, string> = {};
+      if (groqKey) headers["x-groq-key"] = groqKey;
+
+      const transRes = await fetch("/api/transcription", {
+        method: "POST",
+        headers,
+        body: transFormData,
+        signal
+      });
+
+      if (!transRes.ok) {
+        const errJson = await transRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `Transcription failed (HTTP ${transRes.status})`);
+      }
+
+      setStage("aligning");
+      setStageProgress(65);
+
+      const transData = await transRes.json();
+      let segments: LyricSegment[] = transData.segments;
+      const duration = transData.duration || 120;
+
+      // 3. Client Beat Detection (concurrent audio decoding)
+      setStage("beat_detection");
+      setStageProgress(80);
+
+      let beats: number[] = [];
+      let bpm = 120;
+
+      try {
+        const audioCtx = new AudioContext();
+        const arrayBuffer = await audioFile.arrayBuffer();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+        const { detectBeats } = await import("@/lib/beat-detection");
+        const beatResult = await detectBeats(audioBuffer);
+        beats = beatResult.beats;
+        bpm = beatResult.bpm;
+
+        await audioCtx.close();
+      } catch (err) {
+        console.warn("Client beat detection skipped:", err);
+      }
+
+      // 4. Optional AI Animation Generation
+      if (nvidiaKey || process.env.NEXT_PUBLIC_ENABLE_AI !== "false") {
+        setStage("ai_animation");
+        setStageProgress(90);
+
+        try {
+          const aiHeaders: Record<string, string> = { "Content-Type": "application/json" };
+          if (nvidiaKey) aiHeaders["x-nvidia-key"] = nvidiaKey;
+
+          const aiRes = await fetch("/api/nvidia/animations", {
+            method: "POST",
+            headers: aiHeaders,
+            body: JSON.stringify({ segments, bpm, moodHint: "expressive" }),
+            signal
+          });
+
+          if (aiRes.ok) {
+            const aiData = await aiRes.json();
+            if (aiData.segments?.length) {
+              segments = aiData.segments;
+            }
+          }
+        } catch (err) {
+          console.warn("NVIDIA NIM AI animation generation skipped:", err);
+        }
+      }
+
+      // 5. Construct Initial Project State
+      setStage("ready");
+      setStageProgress(100);
+
+      const newProject: EditorProject = {
+        version: 1,
+        title: audioFile.name.replace(/\.[^/.]+$/, ""),
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        duration: Math.max(duration, segments[segments.length - 1]?.end || 0),
+        audioUrl,
+        backgroundColor: "#090d16",
+        segments,
+        beats,
+        bpm,
+        textStyle: defaultTextStyle,
+        toggles: {
+          beatSync: false,
+          contextualAnimations: true,
+          karaokeHighlight: true
+        }
+      };
+
+      setProject(newProject);
+      toast.success("Project generated! Ready to edit.");
+    } catch (error) {
+      if (signal.aborted) {
+        toast.info("Processing cancelled.");
+      } else {
+        const msg = error instanceof Error ? error.message : "Processing failed";
+        toast.error(msg);
+      }
+      setStage("idle");
+    } finally {
+      abortControllerRef.current = null;
+    }
+  };
+
+  const getStageLabel = () => {
+    switch (stage) {
+      case "uploading": return "Uploading audio asset...";
+      case "transcribing": return "Transcribing with Groq Whisper v3...";
+      case "aligning": return "Performing global DP fuzzy alignment...";
+      case "beat_detection": return "Analyzing audio beats & BPM...";
+      case "ai_animation": return "Generating AI animations via NVIDIA NIM...";
+      case "ready": return "Finalizing project...";
+      default: return "";
+    }
+  };
+
+  return (
+    <div className="mx-auto w-full max-w-4xl px-4 py-8">
+      <ApiKeyOnboarding
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+      />
+
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
+            <span>AI Lyrical Video Studio</span>
+            <span className="rounded-full bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-400 border border-yellow-500/20">
+              Pro v1.0
+            </span>
+          </h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Synchronize song audio with lyrics, detect beats, and generate motion graphics.
+          </p>
+        </div>
+
+        <button
+          onClick={() => setIsApiKeyModalOpen(true)}
+          className="flex items-center gap-2 rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-300 hover:border-yellow-500/50 hover:text-white transition-all shadow-md"
+        >
+          <Key className="h-4 w-4 text-yellow-400" />
+          <span>API Key Settings</span>
+        </button>
+      </div>
+
+      <div className="space-y-6 rounded-2xl bg-zinc-900/70 border border-zinc-800/80 p-8 shadow-2xl backdrop-blur-xl">
+        {/* Audio File Dropzone */}
+        <div>
+          <label className="block text-xs font-bold uppercase tracking-wider text-zinc-300 mb-2 flex items-center gap-2">
+            <Music className="h-4 w-4 text-yellow-400" />
+            <span>1. Upload Song Audio</span>
+          </label>
+          <div className="relative group rounded-xl border-2 border-dashed border-zinc-800 bg-zinc-950/60 hover:border-yellow-500/50 p-6 text-center transition-all">
+            <input
+              type="file"
+              accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
+              onChange={handleFileChange}
+              className="absolute inset-0 cursor-pointer opacity-0 z-10"
+            />
+            <div className="flex flex-col items-center justify-center space-y-2">
+              <div className="rounded-full bg-yellow-500/10 p-3 text-yellow-400 group-hover:scale-110 transition-transform">
+                <Upload className="h-6 w-6" />
+              </div>
+              {audioFile ? (
+                <div>
+                  <p className="text-sm font-semibold text-white">{audioFile.name}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {(audioFile.size / (1024 * 1024)).toFixed(2)} MB • Ready
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-sm font-medium text-zinc-300">
+                    Click or drag & drop audio file here
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-1">MP3, WAV, M4A, AAC, OGG up to 50MB</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Lyrics Input */}
+        <div>
+          <label className="block text-xs font-bold uppercase tracking-wider text-zinc-300 mb-2 flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-yellow-400" />
+              <span>2. Paste Song Lyrics</span>
+            </span>
+            <span className="text-xs font-normal text-zinc-500">
+              One line per segment
+            </span>
+          </label>
+          <textarea
+            value={lyricsText}
+            onChange={(e) => setLyricsText(e.target.value)}
+            rows={8}
+            placeholder={`Paste raw song lyrics here...
+Line 1 of song
+Line 2 of song
+Chorus repeat line`}
+            className="w-full rounded-xl bg-zinc-950 border border-zinc-800 p-4 text-sm text-white placeholder-zinc-600 focus:border-yellow-500 focus:outline-none font-mono leading-relaxed"
+          />
+        </div>
+
+        {/* Progress Bar & Status */}
+        {stage !== "idle" && (
+          <div className="rounded-xl bg-zinc-950 border border-zinc-800 p-4 space-y-3">
+            <div className="flex items-center justify-between text-xs font-semibold text-zinc-300">
+              <span className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-yellow-400 animate-spin" />
+                <span>{getStageLabel()}</span>
+              </span>
+              <span className="text-yellow-400">{stageProgress}%</span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-zinc-850 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-yellow-500 to-amber-400 transition-all duration-300"
+                style={{ width: `${stageProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Execute Action */}
+        <div className="pt-2">
+          <button
+            onClick={handleProcess}
+            disabled={stage !== "idle" && stage !== "ready"}
+            className="w-full flex items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-yellow-500 via-amber-500 to-yellow-600 px-6 py-3.5 text-sm font-bold text-zinc-950 shadow-xl shadow-yellow-500/20 hover:brightness-110 disabled:opacity-50 transition-all"
+          >
+            <Wand2 className="h-5 w-5" />
+            <span>Generate Lyrical Video & Open Editor</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:22:20
+FILE PATH: src/components/ApiKeyOnboarding.tsx
+ACTION: Created
+================================================================================
+"use client";
+
+import {
+  clearStoredGroqKey,
+  clearStoredNvidiaKey,
+  getStoredGroqKey,
+  getStoredNvidiaKey,
+  setStoredGroqKey,
+  setStoredNvidiaKey
+} from "@/services/api-keys";
+import { Key, Lock, ShieldCheck, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+
+type ApiKeyOnboardingProps = {
+  isOpen: boolean;
+  onClose: () => void;
+};
+
+export function ApiKeyOnboarding({ isOpen, onClose }: ApiKeyOnboardingProps) {
+  const [groqKey, setGroqKey] = useState("");
+  const [nvidiaKey, setNvidiaKey] = useState("");
+  const [isSaved, setIsSaved] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadKeys() {
+      try {
+        const [gKey, nKey] = await Promise.all([
+          getStoredGroqKey(),
+          getStoredNvidiaKey()
+        ]);
+        if (gKey) setGroqKey(gKey);
+        if (nKey) setNvidiaKey(nKey);
+        if (gKey || nKey) setIsSaved(true);
+      } catch (err) {
+        console.error("Failed to load encrypted keys:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    if (isOpen) {
+      loadKeys();
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleSave = async () => {
+    try {
+      await setStoredGroqKey(groqKey);
+      await setStoredNvidiaKey(nvidiaKey);
+      setIsSaved(true);
+      toast.success("API keys encrypted and saved in secure browser storage.");
+      onClose();
+    } catch {
+      toast.error("Failed to encrypt API keys. Verify WebCrypto support.");
+    }
+  };
+
+  const handleClear = async () => {
+    try {
+      await clearStoredGroqKey();
+      await clearStoredNvidiaKey();
+      setGroqKey("");
+      setNvidiaKey("");
+      setIsSaved(false);
+      toast.info("Stored API keys removed.");
+    } catch {
+      toast.error("Failed to clear API keys.");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4">
+      <div className="relative w-full max-w-lg rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl">
+        <button
+          onClick={onClose}
+          className="absolute right-4 top-4 rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="flex items-center space-x-3 mb-4">
+          <div className="rounded-xl bg-yellow-500/10 p-3 text-yellow-400 border border-yellow-500/20">
+            <Lock className="h-6 w-6" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-white">API Key Settings</h2>
+            <p className="text-sm text-zinc-400">Encrypted in browser storage with AES-GCM</p>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-lg bg-zinc-950 p-3 border border-zinc-850 flex items-start space-x-2.5 text-xs text-zinc-400">
+          <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+          <span>
+            Keys are encrypted using 256-bit AES-GCM with non-extractable keys in IndexedDB. Keys are transmitted only per HTTPS request and never stored in server logs.
+          </span>
+        </div>
+
+        {isLoading ? (
+          <div className="py-8 text-center text-sm text-zinc-400">Loading key settings...</div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-300 mb-1.5 flex items-center justify-between">
+                <span>Groq API Key (Transcription)</span>
+                <a
+                  href="https://console.groq.com/keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-yellow-400 hover:underline font-normal"
+                >
+                  Get key
+                </a>
+              </label>
+              <div className="relative">
+                <input
+                  type="password"
+                  value={groqKey}
+                  onChange={(e) => setGroqKey(e.target.value)}
+                  placeholder="gsk_..."
+                  className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:border-yellow-500 focus:outline-none"
+                />
+                <Key className="absolute right-3 top-3 h-4 w-4 text-zinc-600" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-300 mb-1.5 flex items-center justify-between">
+                <span>NVIDIA NIM API Key (AI Animations)</span>
+                <a
+                  href="https://build.nvidia.com/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-yellow-400 hover:underline font-normal"
+                >
+                  Get key
+                </a>
+              </label>
+              <div className="relative">
+                <input
+                  type="password"
+                  value={nvidiaKey}
+                  onChange={(e) => setNvidiaKey(e.target.value)}
+                  placeholder="nvapi-..."
+                  className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:border-yellow-500 focus:outline-none"
+                />
+                <Key className="absolute right-3 top-3 h-4 w-4 text-zinc-600" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-8 flex items-center justify-between gap-3">
+          {isSaved && (
+            <button
+              onClick={handleClear}
+              className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-2 text-xs font-medium text-red-400 hover:bg-red-500/20"
+            >
+              Clear Keys
+            </button>
+          )}
+
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              className="rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-5 py-2 text-xs font-semibold text-zinc-950 hover:brightness-110 shadow-lg shadow-yellow-500/20"
+            >
+              Save Key Settings
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:22:07
+FILE PATH: src/services/sound-manager.ts
+ACTION: Modified
+================================================================================
+class SoundManager {
+  private audio: HTMLAudioElement | null = null;
+  private onTimeUpdateCallback: ((time: number) => void) | null = null;
+  private onEndedCallback: (() => void) | null = null;
+
+  init(url: string) {
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.src = "";
+    }
+
+    this.audio = new Audio(url);
+    this.audio.preload = "auto";
+
+    this.audio.addEventListener("timeupdate", () => {
+      if (this.audio && this.onTimeUpdateCallback) {
+        this.onTimeUpdateCallback(this.audio.currentTime);
+      }
+    });
+
+    this.audio.addEventListener("ended", () => {
+      if (this.onEndedCallback) {
+        this.onEndedCallback();
+      }
+    });
+  }
+
+  play() {
+    if (this.audio && this.audio.paused) {
+      this.audio.play().catch(() => {});
+    }
+  }
+
+  pause() {
+    if (this.audio && !this.audio.paused) {
+      this.audio.pause();
+    }
+  }
+
+  seek(time: number) {
+    if (this.audio && Number.isFinite(time)) {
+      // Avoid tiny redundant seek jitter
+      if (Math.abs(this.audio.currentTime - time) > 0.05) {
+        this.audio.currentTime = time;
+      }
+    }
+  }
+
+  onTimeUpdate(callback: (time: number) => void) {
+    this.onTimeUpdateCallback = callback;
+  }
+
+  onEnded(callback: () => void) {
+    this.onEndedCallback = callback;
+  }
+
+  destroy() {
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.src = "";
+      this.audio = null;
+    }
+    this.onTimeUpdateCallback = null;
+    this.onEndedCallback = null;
+  }
+}
+
+export const soundManager = new SoundManager();
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 00:21:20
 FILE PATH: src/stores/editor-store.ts
 ACTION: Created
