@@ -1,4 +1,29 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 01:13:40
+FILE PATH: src/services/asset-client.ts
+ACTION: Modified
+================================================================================
+export async function uploadAsset(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+
+  const response = await fetch("/api/assets", {
+    method: "POST",
+    body: form
+  });
+
+  const body = await response.json();
+
+  if (!response.ok) {
+    throw new Error(body.message ?? "Asset upload failed.");
+  }
+
+  return body.url;
+}
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 01:08:50
 FILE PATH: src/remotion/Root.tsx
 ACTION: Modified
