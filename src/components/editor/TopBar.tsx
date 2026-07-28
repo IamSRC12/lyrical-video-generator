@@ -76,41 +76,84 @@ export function TopBar() {
     }
   }
 
-  async function handleExport() {
+  async function handleExport(profile = selectedProfile) {
     if (!project) return;
 
+    setShowExportMenu(false);
     setExportState(true, 0);
 
     try {
       const response = await fetch("/api/export", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({project})
+        body: JSON.stringify({
+          project,
+          profile
+        })
       });
 
       if (!response.ok) {
         const err = await response.json();
-        throw new Error(err.message);
+        const msg = err.issues?.[0]?.message
+          ? `${err.message}: ${err.issues[0].path.join(".")} ${err.issues[0].message}`
+          : (err.message ?? "Export failed.");
+        throw new Error(msg);
       }
 
-      const result = await response.json();
-      setExportState(false, 100);
-      toast.success(
-        `Rendered in ${(result.durationMs / 1000).toFixed(1)}s`
-      );
+      const {jobId} = await response.json();
 
-      // Programmatic anchor download to prevent popup blocker issues
-      const anchor = document.createElement("a");
-      anchor.href = result.url;
-      anchor.download = result.outputFilename ?? "lyrical-video.mp4";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
+      // Poll until job completes or fails
+      let done = false;
+      while (!done) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        const pollRes = await fetch(`/api/export/${jobId}`, {
+          cache: "no-store"
+        });
+
+        if (!pollRes.ok) {
+          const err = await pollRes.json().catch(() => ({}));
+          throw new Error(err.message ?? "Failed to check render progress.");
+        }
+
+        const job = await pollRes.json();
+        setExportState(true, Math.round((job.progress || 0) * 100));
+
+        if (job.status === "done") {
+          done = true;
+          toast.success(
+            `Rendered successfully in ${((job.durationMs || 0) / 1000).toFixed(1)}s`
+          );
+
+          const anchor = document.createElement("a");
+          anchor.href = job.url;
+          anchor.download = job.outputFilename ?? "lyrical-video.mp4";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+        } else if (job.status === "error") {
+          done = true;
+          throw new Error(job.message ?? "Render job failed.");
+        }
+      }
     } catch (error) {
+      const msg = error instanceof Error ? error.message : "Export failed.";
+
+      if (
+        msg.toLowerCase().includes("re-upload") ||
+        msg.toLowerCase().includes("unavailable") ||
+        msg.toLowerCase().includes("404")
+      ) {
+        setNeedsAudioReupload(true);
+        toast.error(
+          "Audio asset unavailable. Please click 'Replace Audio' to re-upload the song.",
+          {duration: 8000}
+        );
+      } else {
+        toast.error(msg);
+      }
+    } finally {
       setExportState(false, 0);
-      toast.error(
-        error instanceof Error ? error.message : "Export failed."
-      );
     }
   }
 
