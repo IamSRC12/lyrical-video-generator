@@ -1,11 +1,18 @@
-import type { AnimationName, EditorProject, LyricSegment, TextStyle } from "@/lib/editor-schema";
+import type { AnimationMode, AnimationName, EditorProject, LyricSegment, TextStyle } from "@/lib/editor-schema";
 import { create } from "zustand";
+
+type GenerationState = {
+  activeRequestId: string | null;
+  status: "idle" | "pending" | "success" | "error" | "cancelled";
+  error: string | null;
+};
 
 type EditorState = {
   project: EditorProject | null;
   currentTime: number;
   isPlaying: boolean;
   selectedSegmentId: string | null;
+  generation: GenerationState;
   history: EditorProject[];
   historyIndex: number;
 
@@ -18,15 +25,27 @@ type EditorState = {
 
   updateSegment: (id: string, patch: Partial<LyricSegment>) => void;
   updateSegmentTime: (id: string, start: number, end: number) => void;
+  nudgeSegment: (id: string, deltaSeconds: number) => void;
   splitSegment: (id: string, splitTime: number) => void;
   mergeSegments: (firstId: string, secondId: string) => void;
   deleteSegment: (id: string) => void;
   realignSegment: (id: string) => void;
 
+  setKaraokeEnabled: (enabled: boolean) => void;
+  setSegmentKaraokeOverride: (id: string, override?: boolean) => void;
   updateTextStyle: (patch: Partial<TextStyle>) => void;
+  setSegmentAnimationMode: (id: string, mode: AnimationMode) => void;
   setSegmentAnimation: (id: string, animation: AnimationName) => void;
   setAllAnimations: (animation: AnimationName) => void;
-  setProjectBackground: (url?: string, color?: string) => void;
+
+  // Generation state tracking
+  beginGeneration: (requestId: string) => void;
+  applyAnimationSuggestions: (
+    requestId: string,
+    suggestions: Array<{ segmentId: string; animation: AnimationName; intensity: number }>
+  ) => void;
+  failGeneration: (requestId: string, error: string) => void;
+  cancelGeneration: () => void;
 
   undo: () => void;
   redo: () => void;
@@ -54,6 +73,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   currentTime: 0,
   isPlaying: false,
   selectedSegmentId: null,
+  generation: {
+    activeRequestId: null,
+    status: "idle",
+    error: null
+  },
   history: [],
   historyIndex: -1,
 
@@ -106,7 +130,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const updatedSegments = project.segments.map((seg) => {
       if (seg.id === id) {
-        // Adjust word timestamps proportionally
         const oldDuration = Math.max(0.1, seg.end - seg.start);
         const newDuration = validEnd - validStart;
         const scale = newDuration / oldDuration;
@@ -131,11 +154,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return seg;
     });
 
-    // Sort segments monotonically by start time
     updatedSegments.sort((a, b) => a.start - b.start);
 
     const newProject: EditorProject = { ...project, segments: updatedSegments };
     set(pushHistory(get(), newProject));
+  },
+
+  nudgeSegment: (id, deltaSeconds) => {
+    const { project } = get();
+    if (!project) return;
+
+    const seg = project.segments.find((s) => s.id === id);
+    if (!seg) return;
+
+    const newStart = Math.max(0, seg.start + deltaSeconds);
+    const newEnd = Math.max(newStart + 0.2, seg.end + deltaSeconds);
+
+    get().updateSegmentTime(id, newStart, newEnd);
   },
 
   splitSegment: (id, splitTime) => {
@@ -154,7 +189,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const firstSeg: LyricSegment = {
       ...seg,
       id: crypto.randomUUID(),
-      line: firstWords.map((w) => w.word).join(" ") || seg.line.slice(0, Math.floor(seg.line.length / 2)),
+      lineIndex: seg.lineIndex,
+      text: firstWords.map((w) => w.text).join(" ") || seg.text.slice(0, Math.floor(seg.text.length / 2)),
       end: splitTime,
       words: firstWords
     };
@@ -162,13 +198,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const secondSeg: LyricSegment = {
       ...seg,
       id: crypto.randomUUID(),
-      line: secondWords.map((w) => w.word).join(" ") || seg.line.slice(Math.floor(seg.line.length / 2)),
+      lineIndex: seg.lineIndex + 1,
+      text: secondWords.map((w) => w.text).join(" ") || seg.text.slice(Math.floor(seg.text.length / 2)),
       start: splitTime,
       words: secondWords
     };
 
     const newSegments = [...project.segments];
     newSegments.splice(targetIdx, 1, firstSeg, secondSeg);
+
+    // Re-index remaining lines
+    newSegments.forEach((s, idx) => {
+      s.lineIndex = idx;
+    });
 
     const newProject: EditorProject = { ...project, segments: newSegments };
     set(pushHistory(get(), newProject));
@@ -188,7 +230,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const mergedSeg: LyricSegment = {
       ...first,
       id: crypto.randomUUID(),
-      line: `${first.line} ${second.line}`,
+      text: `${first.text} ${second.text}`,
       end: Math.max(first.end, second.end),
       words: [...first.words, ...second.words].sort((a, b) => a.start - b.start)
     };
@@ -196,6 +238,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const newSegments = project.segments.filter((s) => s.id !== firstId && s.id !== secondId);
     newSegments.push(mergedSeg);
     newSegments.sort((a, b) => a.start - b.start);
+
+    newSegments.forEach((s, idx) => {
+      s.lineIndex = idx;
+    });
 
     const newProject: EditorProject = { ...project, segments: newSegments };
     set(pushHistory(get(), newProject));
@@ -206,6 +252,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!project) return;
 
     const newSegments = project.segments.filter((s) => s.id !== id);
+    newSegments.forEach((s, idx) => {
+      s.lineIndex = idx;
+    });
+
     const newProject: EditorProject = { ...project, segments: newSegments };
     set({ selectedSegmentId: null, ...pushHistory(get(), newProject) });
   },
@@ -233,6 +283,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     get().updateSegmentTime(id, newStart, newEnd);
   },
 
+  setKaraokeEnabled: (enabled) => {
+    const { project } = get();
+    if (!project) return;
+
+    const newProject: EditorProject = { ...project, karaokeEnabled: enabled };
+    set(pushHistory(get(), newProject));
+  },
+
+  setSegmentKaraokeOverride: (id, override) => {
+    get().updateSegment(id, { karaokeOverride: override });
+  },
+
   updateTextStyle: (patch) => {
     const { project } = get();
     if (!project) return;
@@ -242,29 +304,74 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set(pushHistory(get(), newProject));
   },
 
+  setSegmentAnimationMode: (id, mode) => {
+    get().updateSegment(id, { animationMode: mode });
+  },
+
   setSegmentAnimation: (id, animation) => {
-    get().updateSegment(id, { animation });
+    get().updateSegment(id, { animation, animationMode: "manual" });
   },
 
   setAllAnimations: (animation) => {
     const { project } = get();
     if (!project) return;
 
-    const updatedSegments = project.segments.map((s) => ({ ...s, animation }));
+    const updatedSegments = project.segments.map((s) => ({ ...s, animation, animationMode: "manual" as const }));
     const newProject: EditorProject = { ...project, segments: updatedSegments };
     set(pushHistory(get(), newProject));
   },
 
-  setProjectBackground: (url, color) => {
-    const { project } = get();
-    if (!project) return;
+  beginGeneration: (requestId) => {
+    set({
+      generation: {
+        activeRequestId: requestId,
+        status: "pending",
+        error: null
+      }
+    });
+  },
 
-    const newProject: EditorProject = {
-      ...project,
-      backgroundUrl: url ?? project.backgroundUrl,
-      backgroundColor: color ?? project.backgroundColor
-    };
-    set(pushHistory(get(), newProject));
+  applyAnimationSuggestions: (requestId, suggestions) => {
+    const { project, generation } = get();
+    if (!project || generation.activeRequestId !== requestId) return;
+
+    const sugMap = new Map(suggestions.map((s) => [s.segmentId, s]));
+
+    const updatedSegments = project.segments.map((seg) => {
+      // Don't overwrite manual choices
+      if (seg.animationMode === "manual") return seg;
+
+      const sug = sugMap.get(seg.id);
+      if (sug) {
+        return {
+          ...seg,
+          animationMode: "ai" as const,
+          animation: sug.animation,
+          animationIntensity: sug.intensity
+        };
+      }
+      return seg;
+    });
+
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set({
+      generation: { activeRequestId: null, status: "success", error: null },
+      ...pushHistory(get(), newProject)
+    });
+  },
+
+  failGeneration: (requestId, error) => {
+    const { generation } = get();
+    if (generation.activeRequestId !== requestId) return;
+    set({
+      generation: { activeRequestId: null, status: "error", error }
+    });
+  },
+
+  cancelGeneration: () => {
+    set({
+      generation: { activeRequestId: null, status: "cancelled", error: null }
+    });
   },
 
   undo: () => {

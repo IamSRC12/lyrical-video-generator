@@ -1,7 +1,14 @@
 import { alignLyricsToWords } from "@/lib/alignment";
 import { requireAuth } from "@/lib/auth-guard";
 import { transcribeWithGroq } from "@/services/groq";
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
+
+// Server-side transcription & alignment cache keyed by audio + lyrics SHA-256
+const alignmentCache = new Map<
+  string,
+  { segments: any[]; duration: number; whisperText: string; wordCount: number }
+>();
 
 export async function POST(request: Request) {
   const { response } = await requireAuth();
@@ -30,6 +37,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing lyrics text" }, { status: 400 });
     }
 
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
+
+    // Generate SHA-256 cache key
+    const cacheKey = createHash("sha256")
+      .update(fileBuffer)
+      .update(lyricsText.trim())
+      .update("v2_alignment")
+      .digest("hex");
+
+    if (alignmentCache.has(cacheKey)) {
+      return NextResponse.json(alignmentCache.get(cacheKey));
+    }
+
     // Step 1: Transcribe audio with Groq Whisper
     const transcription = await transcribeWithGroq({
       apiKey: groqApiKey,
@@ -47,12 +67,16 @@ export async function POST(request: Request) {
     // Step 2: Perform global DP alignment
     const segments = alignLyricsToWords(lyricsText, transcription.words);
 
-    return NextResponse.json({
+    const result = {
       segments,
       duration: transcription.duration || 0,
       whisperText: transcription.text || "",
       wordCount: transcription.words.length
-    });
+    };
+
+    alignmentCache.set(cacheKey, result);
+
+    return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown transcription error";
     return NextResponse.json({ error: message }, { status: 500 });

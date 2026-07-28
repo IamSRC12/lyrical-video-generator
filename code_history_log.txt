@@ -1,4 +1,795 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 01:07:33
+FILE PATH: src/components/ApiKeyOnboarding.tsx
+ACTION: Modified
+================================================================================
+"use client";
+
+import type { ServiceTestResult } from "@/app/api/test-services/route";
+import {
+  clearStoredGroqKey,
+  clearStoredOpencodeKey,
+  getStoredGroqKey,
+  getStoredOpencodeKey,
+  setStoredGroqKey,
+  setStoredOpencodeKey
+} from "@/services/api-keys";
+import { Activity, CheckCircle2, Key, Lock, ShieldCheck, X, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+
+type ApiKeyOnboardingProps = {
+  isOpen: boolean;
+  onClose: () => void;
+};
+
+export function ApiKeyOnboarding({ isOpen, onClose }: ApiKeyOnboardingProps) {
+  const [groqKey, setGroqKey] = useState("");
+  const [opencodeKey, setOpencodeKey] = useState("");
+  const [isSaved, setIsSaved] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [testResults, setTestResults] = useState<ServiceTestResult[] | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+
+  useEffect(() => {
+    async function loadKeys() {
+      try {
+        const [gKey, oKey] = await Promise.all([
+          getStoredGroqKey(),
+          getStoredOpencodeKey()
+        ]);
+        if (gKey) setGroqKey(gKey);
+        if (oKey) setOpencodeKey(oKey);
+        if (gKey || oKey) setIsSaved(true);
+      } catch (err) {
+        console.error("Failed to load encrypted keys:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    if (isOpen) {
+      loadKeys();
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleSave = async () => {
+    try {
+      await setStoredGroqKey(groqKey);
+      await setStoredOpencodeKey(opencodeKey);
+      setIsSaved(true);
+      toast.success("API keys encrypted and saved in secure browser storage.");
+      onClose();
+    } catch {
+      toast.error("Failed to encrypt API keys. Verify WebCrypto support.");
+    }
+  };
+
+  const handleClear = async () => {
+    try {
+      await clearStoredGroqKey();
+      await clearStoredOpencodeKey();
+      setGroqKey("");
+      setOpencodeKey("");
+      setIsSaved(false);
+      setTestResults(null);
+      toast.info("Stored API keys removed.");
+    } catch {
+      toast.error("Failed to clear API keys.");
+    }
+  };
+
+  const handleRunDiagnostics = async () => {
+    setIsTesting(true);
+    setTestResults(null);
+
+    try {
+      const headers: Record<string, string> = {};
+      if (groqKey) headers["x-groq-key"] = groqKey;
+      if (opencodeKey) headers["x-opencode-key"] = opencodeKey;
+
+      const res = await fetch("/api/test-services", {
+        method: "POST",
+        headers
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "Diagnostics request failed");
+      }
+
+      const data = await res.json();
+      setTestResults(data.results);
+      toast.success("API Diagnostics complete!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Diagnostics failed");
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto">
+      <div className="relative w-full max-w-xl rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl my-8">
+        <button
+          onClick={onClose}
+          className="absolute right-4 top-4 rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="flex items-center space-x-3 mb-4">
+          <div className="rounded-xl bg-yellow-500/10 p-3 text-yellow-400 border border-yellow-500/20">
+            <Lock className="h-6 w-6" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-white">API Key & Diagnostics</h2>
+            <p className="text-sm text-zinc-400">Encrypted WebCrypto AES-GCM storage</p>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-lg bg-zinc-950 p-3 border border-zinc-850 flex items-start space-x-2.5 text-xs text-zinc-400">
+          <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+          <span>
+            Keys are encrypted using 256-bit AES-GCM with non-extractable keys in IndexedDB. Keys are transmitted only per HTTPS request and never written to logs or disk.
+          </span>
+        </div>
+
+        {isLoading ? (
+          <div className="py-8 text-center text-sm text-zinc-400">Loading key settings...</div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-300 mb-1.5 flex items-center justify-between">
+                <span>Groq API Key (Whisper v3 Transcription)</span>
+                <a
+                  href="https://console.groq.com/keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-yellow-400 hover:underline font-normal"
+                >
+                  Get key
+                </a>
+              </label>
+              <div className="relative">
+                <input
+                  type="password"
+                  value={groqKey}
+                  onChange={(e) => setGroqKey(e.target.value)}
+                  placeholder="gsk_..."
+                  className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:border-yellow-500 focus:outline-none"
+                />
+                <Key className="absolute right-3 top-3 h-4 w-4 text-zinc-600" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-300 mb-1.5 flex items-center justify-between">
+                <span>OpenCode / DeepSeek V4 Flash API Key</span>
+                <a
+                  href="https://platform.deepseek.com/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-yellow-400 hover:underline font-normal"
+                >
+                  Get key
+                </a>
+              </label>
+              <div className="relative">
+                <input
+                  type="password"
+                  value={opencodeKey}
+                  onChange={(e) => setOpencodeKey(e.target.value)}
+                  placeholder="sk-..."
+                  className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:border-yellow-500 focus:outline-none"
+                />
+                <Key className="absolute right-3 top-3 h-4 w-4 text-zinc-600" />
+              </div>
+            </div>
+
+            {/* Test Diagnostics Section */}
+            <div className="pt-2">
+              <button
+                onClick={handleRunDiagnostics}
+                disabled={isTesting}
+                className="w-full flex items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-850 px-4 py-2.5 text-xs font-bold text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {isTesting ? <Activity className="h-4 w-4 animate-spin text-yellow-400" /> : <Activity className="h-4 w-4 text-yellow-400" />}
+                <span>{isTesting ? "Testing System Readiness..." : "Run API & System Diagnostics"}</span>
+              </button>
+
+              {testResults && (
+                <div className="mt-3 space-y-2 rounded-xl bg-zinc-950 p-3 border border-zinc-850 text-xs">
+                  {testResults.map((t) => (
+                    <div key={t.service} className="flex items-start justify-between border-b border-zinc-850/60 pb-2 last:border-0 last:pb-0">
+                      <div className="flex items-center gap-2">
+                        {t.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" /> : <XCircle className="h-4 w-4 text-red-400 shrink-0" />}
+                        <div>
+                          <div className="font-semibold uppercase tracking-wider text-zinc-200">{t.service}</div>
+                          <div className="text-zinc-400">{t.message}</div>
+                        </div>
+                      </div>
+                      <span className="font-mono text-zinc-500 shrink-0">{t.latencyMs}ms</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 flex items-center justify-between gap-3">
+          {isSaved && (
+            <button
+              onClick={handleClear}
+              className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-2 text-xs font-medium text-red-400 hover:bg-red-500/20"
+            >
+              Clear Keys
+            </button>
+          )}
+
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              className="rounded-xl bg-gradient-to-r from-yellow-500 to-amber-500 px-5 py-2 text-xs font-semibold text-zinc-950 hover:brightness-110 shadow-lg shadow-yellow-500/20"
+            >
+              Save Key Settings
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:07:20
+FILE PATH: src/stores/editor-store.ts
+ACTION: Modified
+================================================================================
+import type { AnimationMode, AnimationName, EditorProject, LyricSegment, TextStyle } from "@/lib/editor-schema";
+import { create } from "zustand";
+
+type GenerationState = {
+  activeRequestId: string | null;
+  status: "idle" | "pending" | "success" | "error" | "cancelled";
+  error: string | null;
+};
+
+type EditorState = {
+  project: EditorProject | null;
+  currentTime: number;
+  isPlaying: boolean;
+  selectedSegmentId: string | null;
+  generation: GenerationState;
+  history: EditorProject[];
+  historyIndex: number;
+
+  // Actions
+  setProject: (project: EditorProject) => void;
+  setCurrentTime: (time: number) => void;
+  setIsPlaying: (playing: boolean) => void;
+  togglePlay: () => void;
+  selectSegment: (id: string | null) => void;
+
+  updateSegment: (id: string, patch: Partial<LyricSegment>) => void;
+  updateSegmentTime: (id: string, start: number, end: number) => void;
+  nudgeSegment: (id: string, deltaSeconds: number) => void;
+  splitSegment: (id: string, splitTime: number) => void;
+  mergeSegments: (firstId: string, secondId: string) => void;
+  deleteSegment: (id: string) => void;
+  realignSegment: (id: string) => void;
+
+  setKaraokeEnabled: (enabled: boolean) => void;
+  setSegmentKaraokeOverride: (id: string, override?: boolean) => void;
+  updateTextStyle: (patch: Partial<TextStyle>) => void;
+  setSegmentAnimationMode: (id: string, mode: AnimationMode) => void;
+  setSegmentAnimation: (id: string, animation: AnimationName) => void;
+  setAllAnimations: (animation: AnimationName) => void;
+
+  // Generation state tracking
+  beginGeneration: (requestId: string) => void;
+  applyAnimationSuggestions: (
+    requestId: string,
+    suggestions: Array<{ segmentId: string; animation: AnimationName; intensity: number }>
+  ) => void;
+  failGeneration: (requestId: string, error: string) => void;
+  cancelGeneration: () => void;
+
+  undo: () => void;
+  redo: () => void;
+};
+
+const MAX_HISTORY = 30;
+
+function pushHistory(state: EditorState, newProject: EditorProject): Partial<EditorState> {
+  const newHistory = state.history.slice(0, state.historyIndex + 1);
+  newHistory.push(JSON.parse(JSON.stringify(newProject)));
+
+  if (newHistory.length > MAX_HISTORY) {
+    newHistory.shift();
+  }
+
+  return {
+    project: newProject,
+    history: newHistory,
+    historyIndex: newHistory.length - 1
+  };
+}
+
+export const useEditorStore = create<EditorState>((set, get) => ({
+  project: null,
+  currentTime: 0,
+  isPlaying: false,
+  selectedSegmentId: null,
+  generation: {
+    activeRequestId: null,
+    status: "idle",
+    error: null
+  },
+  history: [],
+  historyIndex: -1,
+
+  setProject: (project) => {
+    const clone = JSON.parse(JSON.stringify(project));
+    set({
+      project: clone,
+      currentTime: 0,
+      isPlaying: false,
+      selectedSegmentId: clone.segments[0]?.id || null,
+      history: [clone],
+      historyIndex: 0
+    });
+  },
+
+  setCurrentTime: (time) => {
+    const { project } = get();
+    const duration = project?.duration || 0;
+    const clamped = Math.max(0, Math.min(time, duration));
+    set({ currentTime: clamped });
+  },
+
+  setIsPlaying: (playing) => set({ isPlaying: playing }),
+  togglePlay: () => set((s) => ({ isPlaying: !s.isPlaying })),
+
+  selectSegment: (id) => set({ selectedSegmentId: id }),
+
+  updateSegment: (id, patch) => {
+    const { project } = get();
+    if (!project) return;
+
+    const updatedSegments = project.segments.map((seg) => {
+      if (seg.id === id) {
+        return { ...seg, ...patch };
+      }
+      return seg;
+    });
+
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  updateSegmentTime: (id, start, end) => {
+    const { project } = get();
+    if (!project) return;
+
+    const MIN_DURATION = 0.2;
+    const validStart = Math.max(0, start);
+    const validEnd = Math.max(validStart + MIN_DURATION, end);
+
+    const updatedSegments = project.segments.map((seg) => {
+      if (seg.id === id) {
+        const oldDuration = Math.max(0.1, seg.end - seg.start);
+        const newDuration = validEnd - validStart;
+        const scale = newDuration / oldDuration;
+
+        const updatedWords = seg.words.map((w) => {
+          const relativeStart = w.start - seg.start;
+          const relativeEnd = w.end - seg.start;
+          return {
+            ...w,
+            start: validStart + relativeStart * scale,
+            end: validStart + relativeEnd * scale
+          };
+        });
+
+        return {
+          ...seg,
+          start: validStart,
+          end: validEnd,
+          words: updatedWords
+        };
+      }
+      return seg;
+    });
+
+    updatedSegments.sort((a, b) => a.start - b.start);
+
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  nudgeSegment: (id, deltaSeconds) => {
+    const { project } = get();
+    if (!project) return;
+
+    const seg = project.segments.find((s) => s.id === id);
+    if (!seg) return;
+
+    const newStart = Math.max(0, seg.start + deltaSeconds);
+    const newEnd = Math.max(newStart + 0.2, seg.end + deltaSeconds);
+
+    get().updateSegmentTime(id, newStart, newEnd);
+  },
+
+  splitSegment: (id, splitTime) => {
+    const { project } = get();
+    if (!project) return;
+
+    const targetIdx = project.segments.findIndex((s) => s.id === id);
+    if (targetIdx === -1) return;
+
+    const seg = project.segments[targetIdx];
+    if (splitTime <= seg.start + 0.1 || splitTime >= seg.end - 0.1) return;
+
+    const firstWords = seg.words.filter((w) => w.end <= splitTime);
+    const secondWords = seg.words.filter((w) => w.start >= splitTime);
+
+    const firstSeg: LyricSegment = {
+      ...seg,
+      id: crypto.randomUUID(),
+      lineIndex: seg.lineIndex,
+      text: firstWords.map((w) => w.text).join(" ") || seg.text.slice(0, Math.floor(seg.text.length / 2)),
+      end: splitTime,
+      words: firstWords
+    };
+
+    const secondSeg: LyricSegment = {
+      ...seg,
+      id: crypto.randomUUID(),
+      lineIndex: seg.lineIndex + 1,
+      text: secondWords.map((w) => w.text).join(" ") || seg.text.slice(Math.floor(seg.text.length / 2)),
+      start: splitTime,
+      words: secondWords
+    };
+
+    const newSegments = [...project.segments];
+    newSegments.splice(targetIdx, 1, firstSeg, secondSeg);
+
+    // Re-index remaining lines
+    newSegments.forEach((s, idx) => {
+      s.lineIndex = idx;
+    });
+
+    const newProject: EditorProject = { ...project, segments: newSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  mergeSegments: (firstId, secondId) => {
+    const { project } = get();
+    if (!project) return;
+
+    const firstIdx = project.segments.findIndex((s) => s.id === firstId);
+    const secondIdx = project.segments.findIndex((s) => s.id === secondId);
+    if (firstIdx === -1 || secondIdx === -1) return;
+
+    const first = project.segments[firstIdx];
+    const second = project.segments[secondIdx];
+
+    const mergedSeg: LyricSegment = {
+      ...first,
+      id: crypto.randomUUID(),
+      text: `${first.text} ${second.text}`,
+      end: Math.max(first.end, second.end),
+      words: [...first.words, ...second.words].sort((a, b) => a.start - b.start)
+    };
+
+    const newSegments = project.segments.filter((s) => s.id !== firstId && s.id !== secondId);
+    newSegments.push(mergedSeg);
+    newSegments.sort((a, b) => a.start - b.start);
+
+    newSegments.forEach((s, idx) => {
+      s.lineIndex = idx;
+    });
+
+    const newProject: EditorProject = { ...project, segments: newSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  deleteSegment: (id) => {
+    const { project } = get();
+    if (!project) return;
+
+    const newSegments = project.segments.filter((s) => s.id !== id);
+    newSegments.forEach((s, idx) => {
+      s.lineIndex = idx;
+    });
+
+    const newProject: EditorProject = { ...project, segments: newSegments };
+    set({ selectedSegmentId: null, ...pushHistory(get(), newProject) });
+  },
+
+  realignSegment: (id) => {
+    const { project } = get();
+    if (!project) return;
+
+    const idx = project.segments.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+
+    const seg = project.segments[idx];
+    const prevSeg = project.segments[idx - 1];
+    const nextSeg = project.segments[idx + 1];
+
+    const minStart = prevSeg ? prevSeg.end + 0.05 : 0;
+    const maxEnd = nextSeg ? nextSeg.start - 0.05 : project.duration;
+
+    if (minStart >= maxEnd) return;
+
+    const duration = Math.min(seg.end - seg.start, maxEnd - minStart);
+    const newStart = minStart;
+    const newEnd = minStart + duration;
+
+    get().updateSegmentTime(id, newStart, newEnd);
+  },
+
+  setKaraokeEnabled: (enabled) => {
+    const { project } = get();
+    if (!project) return;
+
+    const newProject: EditorProject = { ...project, karaokeEnabled: enabled };
+    set(pushHistory(get(), newProject));
+  },
+
+  setSegmentKaraokeOverride: (id, override) => {
+    get().updateSegment(id, { karaokeOverride: override });
+  },
+
+  updateTextStyle: (patch) => {
+    const { project } = get();
+    if (!project) return;
+
+    const newTextStyle: TextStyle = { ...project.textStyle, ...patch };
+    const newProject: EditorProject = { ...project, textStyle: newTextStyle };
+    set(pushHistory(get(), newProject));
+  },
+
+  setSegmentAnimationMode: (id, mode) => {
+    get().updateSegment(id, { animationMode: mode });
+  },
+
+  setSegmentAnimation: (id, animation) => {
+    get().updateSegment(id, { animation, animationMode: "manual" });
+  },
+
+  setAllAnimations: (animation) => {
+    const { project } = get();
+    if (!project) return;
+
+    const updatedSegments = project.segments.map((s) => ({ ...s, animation, animationMode: "manual" as const }));
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  beginGeneration: (requestId) => {
+    set({
+      generation: {
+        activeRequestId: requestId,
+        status: "pending",
+        error: null
+      }
+    });
+  },
+
+  applyAnimationSuggestions: (requestId, suggestions) => {
+    const { project, generation } = get();
+    if (!project || generation.activeRequestId !== requestId) return;
+
+    const sugMap = new Map(suggestions.map((s) => [s.segmentId, s]));
+
+    const updatedSegments = project.segments.map((seg) => {
+      // Don't overwrite manual choices
+      if (seg.animationMode === "manual") return seg;
+
+      const sug = sugMap.get(seg.id);
+      if (sug) {
+        return {
+          ...seg,
+          animationMode: "ai" as const,
+          animation: sug.animation,
+          animationIntensity: sug.intensity
+        };
+      }
+      return seg;
+    });
+
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set({
+      generation: { activeRequestId: null, status: "success", error: null },
+      ...pushHistory(get(), newProject)
+    });
+  },
+
+  failGeneration: (requestId, error) => {
+    const { generation } = get();
+    if (generation.activeRequestId !== requestId) return;
+    set({
+      generation: { activeRequestId: null, status: "error", error }
+    });
+  },
+
+  cancelGeneration: () => {
+    set({
+      generation: { activeRequestId: null, status: "cancelled", error: null }
+    });
+  },
+
+  undo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      set({
+        project: JSON.parse(JSON.stringify(history[newIndex])),
+        historyIndex: newIndex
+      });
+    }
+  },
+
+  redo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1;
+      set({
+        project: JSON.parse(JSON.stringify(history[newIndex])),
+        historyIndex: newIndex
+      });
+    }
+  }
+}));
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:07:07
+FILE PATH: src/app/api/transcription/route.ts
+ACTION: Modified
+================================================================================
+import { alignLyricsToWords } from "@/lib/alignment";
+import { requireAuth } from "@/lib/auth-guard";
+import { transcribeWithGroq } from "@/services/groq";
+import { createHash } from "node:crypto";
+import { NextResponse } from "next/server";
+
+// Server-side transcription & alignment cache keyed by audio + lyrics SHA-256
+const alignmentCache = new Map<
+  string,
+  { segments: any[]; duration: number; whisperText: string; wordCount: number }
+>();
+
+export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
+  try {
+    const customGroqKey = request.headers.get("x-groq-key");
+    const groqApiKey = customGroqKey || process.env.GROQ_API_KEY;
+
+    if (!groqApiKey) {
+      return NextResponse.json(
+        { error: "No Groq API key provided. Please configure custom API key or set GROQ_API_KEY on server." },
+        { status: 400 }
+      );
+    }
+
+    const formData = await request.formData();
+    const file = formData.get("file") as File | null;
+    const lyricsText = formData.get("lyrics") as string | null;
+
+    if (!file) {
+      return NextResponse.json({ error: "Missing audio file" }, { status: 400 });
+    }
+
+    if (!lyricsText || !lyricsText.trim()) {
+      return NextResponse.json({ error: "Missing lyrics text" }, { status: 400 });
+    }
+
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
+
+    // Generate SHA-256 cache key
+    const cacheKey = createHash("sha256")
+      .update(fileBuffer)
+      .update(lyricsText.trim())
+      .update("v2_alignment")
+      .digest("hex");
+
+    if (alignmentCache.has(cacheKey)) {
+      return NextResponse.json(alignmentCache.get(cacheKey));
+    }
+
+    // Step 1: Transcribe audio with Groq Whisper
+    const transcription = await transcribeWithGroq({
+      apiKey: groqApiKey,
+      file,
+      prompt: lyricsText.slice(0, 500)
+    });
+
+    if (!transcription.words || transcription.words.length === 0) {
+      return NextResponse.json(
+        { error: "Groq transcription returned no timed words. Check audio clarity or format." },
+        { status: 422 }
+      );
+    }
+
+    // Step 2: Perform global DP alignment
+    const segments = alignLyricsToWords(lyricsText, transcription.words);
+
+    const result = {
+      segments,
+      duration: transcription.duration || 0,
+      whisperText: transcription.text || "",
+      wordCount: transcription.words.length
+    };
+
+    alignmentCache.set(cacheKey, result);
+
+    return NextResponse.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown transcription error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:06:56
+FILE PATH: src/app/api/export/[jobId]/route.ts
+ACTION: Created
+================================================================================
+import { requireAuth } from "@/lib/auth-guard";
+import { getExportJob } from "@/services/render";
+import { NextResponse } from "next/server";
+
+export async function GET(
+  request: Request,
+  props: { params: Promise<{ jobId: string }> }
+) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
+  const params = await props.params;
+  const jobId = params.jobId;
+
+  const job = getExportJob(jobId);
+  if (!job) {
+    return NextResponse.json({ error: "Export job not found" }, { status: 404 });
+  }
+
+  const downloadUrl = job.outputAssetId ? `/api/assets/${job.outputAssetId}` : undefined;
+
+  return NextResponse.json({
+    jobId: job.id,
+    status: job.status,
+    progress: job.progress,
+    outputAssetId: job.outputAssetId,
+    downloadUrl,
+    error: job.error,
+    updatedAt: job.updatedAt
+  });
+}
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 01:06:45
 FILE PATH: src/app/api/export/route.ts
 ACTION: Modified
