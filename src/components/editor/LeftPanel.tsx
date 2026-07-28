@@ -40,6 +40,7 @@ export function LeftPanel() {
 
   const backgroundInputRef = useRef<HTMLInputElement>(null);
   const [uploadingBackground, setUploadingBackground] = useState(false);
+  const [dragActiveBg, setDragActiveBg] = useState(false);
 
   if (!project) return null;
 
@@ -69,14 +70,32 @@ export function LeftPanel() {
     }
   }
 
+  function handleBgDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragActiveBg(false);
+    const file = e.dataTransfer.files[0];
+    if (file) void uploadBackground(file);
+  }
+
   return (
     <aside className="editor-sidebar flex flex-col overflow-hidden border-r border-white/5 bg-surface-raised">
       <div className="flex-1 overflow-y-auto divide-y divide-white/5">
         {/* Background Controls */}
-        <div className="space-y-3 p-4">
+        <div
+          className={cn(
+            "space-y-3 p-4 transition-all",
+            dragActiveBg && "bg-violet-500/10 ring-1 ring-violet-500/30 rounded-lg"
+          )}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActiveBg(true);
+          }}
+          onDragLeave={() => setDragActiveBg(false)}
+          onDrop={handleBgDrop}
+        >
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
             <ImagePlus size={12} />
-            Background
+            Background (Drag &amp; Drop Image)
           </div>
 
           <input
