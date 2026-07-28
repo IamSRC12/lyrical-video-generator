@@ -1,5 +1,5 @@
 import type {GroqWord} from "@/services/groq";
-import type {LyricSegment, TimedWord} from "./editor-schema";
+import type {AnimationName, LyricSegment, TimedWord} from "./editor-schema";
 
 type LyricToken = {
   original: string;
@@ -293,7 +293,7 @@ export function alignLyricsToWords(
       start,
       end: Math.max(start + 0.1, end),
       words,
-      animation: lineIndex % 3 === 0 ? "pop" : "fade"
+      animation: (lineIndex % 3 === 0 ? "pop" : "fade") as AnimationName
     };
   });
 

@@ -209,9 +209,11 @@ export function PreviewCanvas() {
       return;
     }
 
+    const totalDuration = project ? project.duration : 0;
+
     audio.currentTime = Math.max(
       0,
-      Math.min(playhead, audio.duration || project.duration)
+      Math.min(playhead, audio.duration || totalDuration)
     );
 
     try {
