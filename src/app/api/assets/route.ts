@@ -34,12 +34,11 @@ export async function POST(request: Request) {
     await mkdir(directory, {recursive: true});
     await writeFile(path.join(directory, id), Buffer.from(await file.arrayBuffer()));
 
-    const baseUrl =
-      process.env.APP_BASE_URL ?? new URL(request.url).origin;
+    const assetPath = `/api/assets/${encodeURIComponent(id)}`;
 
     return Response.json({
       id,
-      url: `${baseUrl}/api/assets/${encodeURIComponent(id)}`
+      path: assetPath
     });
   } catch (error) {
     if (error instanceof Response) return error;

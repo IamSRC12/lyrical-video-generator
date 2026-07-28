@@ -277,7 +277,8 @@ export function UploadAndAlign() {
       // Step 1: Upload audio asset
       setStage("uploading");
       setProgress(15);
-      const audioUrl = await uploadAsset(audioFile);
+      const uploadedAudio = await uploadAsset(audioFile);
+      const audioUrl = uploadedAudio.url;
       setProgress(30);
 
       // Step 2: Transcribe and align
