@@ -258,6 +258,7 @@ export function PreviewCanvas() {
   }
 
   function executeJump() {
+    if (!project) return;
     const seconds = parseTimestamp(jumpInputValue);
     if (seconds === null) {
       toast.error("Invalid timestamp format. Use MM:SS or seconds (e.g. 1:25 or 85)");
