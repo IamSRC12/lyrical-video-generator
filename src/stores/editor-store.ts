@@ -194,6 +194,18 @@ export const useEditorStore = create<EditorState>()(
             : state
         ),
 
+      replaceAudioUrl: (audioUrl) =>
+        set((state) =>
+          state.project
+            ? {
+                project: {
+                  ...state.project,
+                  audioUrl
+                }
+              }
+            : state
+        ),
+
       patchTextStyle: (patch) =>
         set((state) =>
           state.project

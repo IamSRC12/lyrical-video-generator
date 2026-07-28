@@ -1,19 +1,21 @@
 "use client";
 
-import {useState} from "react";
+import {useRef, useState} from "react";
 import {
   Check,
   ChevronDown,
   Download,
+  FileAudio,
   Film,
   LoaderCircle,
   Monitor,
-  Sparkles,
-  Zap
+  RefreshCw,
+  Sparkles
 } from "lucide-react";
 import {toast} from "sonner";
 import {useEditorStore} from "@/stores/editor-store";
 import {apiKeyStorage} from "@/services/api-keys";
+import {uploadAsset} from "@/services/asset-client";
 import {cn} from "@/lib/cn";
 
 type ExportProfile = "draft" | "standard" | "high";
@@ -52,13 +54,40 @@ export function TopBar() {
   const setExportState = useEditorStore((s) => s.setExportState);
   const setToggle = useEditorStore((s) => s.setToggle);
   const setSegments = useEditorStore((s) => s.setSegments);
+  const replaceAudioUrl = useEditorStore((s) => s.replaceAudioUrl);
 
+  const replaceAudioRef = useRef<HTMLInputElement>(null);
+  const [isReplacingAudio, setIsReplacingAudio] = useState(false);
   const [selectedProfile, setSelectedProfile] = useState<ExportProfile>("standard");
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [needsAudioReupload, setNeedsAudioReupload] = useState(false);
 
   if (!project) return null;
 
   const is1080 = project.width === 1920;
+
+  async function handleReplaceAudio(file: File) {
+    if (!file.type.startsWith("audio/")) {
+      toast.error("Please select a valid audio file.");
+      return;
+    }
+
+    try {
+      setIsReplacingAudio(true);
+      toast.info(`Uploading replacement audio: ${file.name}...`);
+      const uploaded = await uploadAsset(file);
+
+      replaceAudioUrl(uploaded.url);
+      setNeedsAudioReupload(false);
+      toast.success("Audio file replaced and verified successfully!");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to replace audio."
+      );
+    } finally {
+      setIsReplacingAudio(false);
+    }
+  }
 
   async function handleContextualAnimations() {
     if (!project) return;
@@ -131,7 +160,7 @@ export function TopBar() {
 
       if (!response.ok) {
         const err = await response.json();
-        throw new Error(err.message);
+        throw new Error(err.message ?? "Export failed.");
       }
 
       const result = await response.json();
@@ -149,9 +178,21 @@ export function TopBar() {
       anchor.remove();
     } catch (error) {
       setExportState(false, 0);
-      toast.error(
-        error instanceof Error ? error.message : "Export failed."
-      );
+      const msg = error instanceof Error ? error.message : "Export failed.";
+
+      if (
+        msg.toLowerCase().includes("re-upload") ||
+        msg.toLowerCase().includes("unavailable") ||
+        msg.toLowerCase().includes("404")
+      ) {
+        setNeedsAudioReupload(true);
+        toast.error(
+          "Audio asset unavailable. Please click 'Replace Audio' to re-upload the song.",
+          {duration: 8000}
+        );
+      } else {
+        toast.error(msg);
+      }
     }
   }
 
@@ -165,7 +206,41 @@ export function TopBar() {
         <span className="badge">{project.fps} FPS</span>
       </div>
 
+      {/* Hidden file input for Replace Audio */}
+      <input
+        ref={replaceAudioRef}
+        type="file"
+        accept="audio/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void handleReplaceAudio(file);
+          e.currentTarget.value = "";
+        }}
+      />
+
       <div className="flex items-center gap-2 relative">
+        {/* Replace Audio recovery button */}
+        <button
+          type="button"
+          className={cn(
+            "button-ghost text-xs flex items-center gap-1.5",
+            needsAudioReupload
+              ? "border border-amber-500/50 bg-amber-500/15 text-amber-300 animate-pulse"
+              : "text-slate-300 hover:text-white"
+          )}
+          disabled={isReplacingAudio}
+          onClick={() => replaceAudioRef.current?.click()}
+          title="Re-upload or replace the project audio track"
+        >
+          {isReplacingAudio ? (
+            <LoaderCircle size={14} className="animate-spin" />
+          ) : (
+            <RefreshCw size={14} />
+          )}
+          <span>Replace Audio</span>
+        </button>
+
         {/* Resolution toggle */}
         <button
           className={cn(
