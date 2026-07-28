@@ -1,34 +1,30 @@
-export function getBeatPulse(
+export function getRhythmPulse(
   beats: number[],
-  time: number,
-  pulseDuration = 0.14
+  time: number
 ): number {
   if (!beats.length) return 0;
 
-  let low = 0;
-  let high = beats.length - 1;
+  let nearestDistance = Infinity;
 
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
+  for (const beat of beats) {
+    const distance = Math.abs(beat - time);
 
-    if (beats[middle] < time) {
-      low = middle + 1;
-    } else {
-      high = middle;
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
     }
+
+    if (beat > time + 0.15) break;
   }
 
-  const candidates = [
-    beats[low],
-    beats[Math.max(0, low - 1)]
-  ].filter((beat): beat is number => Number.isFinite(beat));
+  if (nearestDistance >= 0.12) return 0;
 
-  const distance = Math.min(
-    ...candidates.map((beat) => Math.abs(beat - time))
-  );
+  const progress = 1 - nearestDistance / 0.12;
+  return progress * progress;
+}
 
-  if (distance >= pulseDuration) return 0;
-
-  const linear = 1 - distance / pulseDuration;
-  return linear * linear;
+export function getBeatPulse(
+  beats: number[],
+  time: number
+): number {
+  return getRhythmPulse(beats, time);
 }

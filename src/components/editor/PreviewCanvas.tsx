@@ -98,8 +98,8 @@ export function PreviewCanvas() {
       if (file.type.startsWith("image/")) {
         try {
           toast.info(`Uploading background image: ${file.name}...`);
-          const url = await uploadAsset(file);
-          setBackground(url);
+          const uploaded = await uploadAsset(file);
+          setBackground(uploaded.url);
           toast.success("Background image updated!");
         } catch {
           toast.error("Failed to upload image.");
@@ -107,8 +107,8 @@ export function PreviewCanvas() {
       } else if (file.type.startsWith("audio/")) {
         try {
           toast.info(`Uploading audio track: ${file.name}...`);
-          const url = await uploadAsset(file);
-          setAudioUrl(url);
+          const uploaded = await uploadAsset(file);
+          setAudioUrl(uploaded.url);
           toast.success("Audio track updated!");
         } catch {
           toast.error("Failed to upload audio file.");

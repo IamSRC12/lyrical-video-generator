@@ -9,7 +9,7 @@ import {Audio} from "@remotion/media";
 import type {EditorProject} from "../lib/editor-schema";
 import {getAnimationStyle} from "./animations";
 import {getActiveSegment, getHighlightedWordIndex} from "../lib/caption-timing";
-import {getBeatPulse} from "../lib/beat-sync";
+import {getRhythmPulse} from "../lib/beat-sync";
 
 type CompositionProps = {
   project: EditorProject;
@@ -42,11 +42,11 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
 
   const style = project.textStyle;
 
-  const beatPulse = project.toggles.beatSync
-    ? getBeatPulse(project.beats, currentTime)
+  const rhythmPulse = project.toggles.beatSync
+    ? getRhythmPulse(project.beats, currentTime)
     : 0;
 
-  const beatScale = 1 + beatPulse * 0.045;
+  const rhythmScale = 1 + rhythmPulse * 0.035;
 
   return (
     <AbsoluteFill>
@@ -89,7 +89,7 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
             position: "absolute",
             left: `${style.positionX}%`,
             top: `${style.positionY}%`,
-            transform: `translate(-50%, -50%) scale(${beatScale}) ${animStyle.transform}`,
+            transform: `translate(-50%, -50%) scale(${rhythmScale}) ${animStyle.transform}`,
             opacity: animStyle.opacity,
             filter: animStyle.filter,
             textAlign: style.align,
@@ -111,8 +111,8 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
               textTransform: style.textTransform,
               color: style.color,
               textShadow:
-                beatPulse > 0
-                  ? `${style.shadow}, 0 0 ${18 + beatPulse * 30}px ${
+                rhythmPulse > 0
+                  ? `${style.shadow}, 0 0 ${12 + rhythmPulse * 20}px ${
                       style.highlightColor
                     }`
                   : animStyle.textShadow ?? style.shadow,
@@ -139,19 +139,6 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
           </p>
         </div>
       )}
-
-      {/* Beat sync flash overlay */}
-      {project.toggles.beatSync && (() => {
-        const flashOpacity = beatPulse * 0.15;
-        return flashOpacity > 0 ? (
-          <AbsoluteFill
-            style={{
-              backgroundColor: `rgba(139, 92, 246, ${flashOpacity})`,
-              pointerEvents: "none"
-            }}
-          />
-        ) : null;
-      })()}
     </AbsoluteFill>
   );
 };

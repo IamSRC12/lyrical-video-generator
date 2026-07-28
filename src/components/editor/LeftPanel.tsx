@@ -56,8 +56,8 @@ export function LeftPanel() {
 
     try {
       setUploadingBackground(true);
-      const url = await uploadAsset(file);
-      setBackground(url);
+      const uploaded = await uploadAsset(file);
+      setBackground(uploaded.url);
       toast.success("Background inserted.");
     } catch (error) {
       toast.error(
