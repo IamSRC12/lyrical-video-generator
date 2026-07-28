@@ -16,7 +16,6 @@ export function PreviewCanvas() {
   if (!project) return null;
 
   const durationInFrames = Math.max(1, Math.ceil((project.duration || 10) * project.fps));
-  const currentFrame = Math.floor(currentTime * project.fps);
 
   // Sync player play/pause state
   useEffect(() => {
@@ -58,9 +57,8 @@ export function PreviewCanvas() {
           objectFit: "contain"
         }}
         controls={false}
-        clickToPlaySelectsAutoPlay={false}
         loop
-        onFrameUpdate={(e) => {
+        onFrameUpdate={(e: { detail: { frame: number } }) => {
           const newTime = e.detail.frame / project.fps;
           if (isPlaying) {
             setCurrentTime(newTime);

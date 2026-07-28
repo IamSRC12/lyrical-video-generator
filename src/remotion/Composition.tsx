@@ -1,6 +1,6 @@
 import type { EditorProject } from "@/lib/editor-schema";
 import { Audio, AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
-import { getAnimationStyle } from "./animations";
+import { getAnimationStyle, type AnimationStyle } from "./animations";
 
 type LyricalCompositionProps = {
   project: EditorProject;
@@ -18,7 +18,7 @@ export const LyricalComposition: React.FC<LyricalCompositionProps> = ({ project 
     (seg) => currentTime >= seg.start && currentTime <= seg.end
   );
 
-  let activeAnimStyle = { opacity: 0, transform: "none" };
+  let activeAnimStyle: AnimationStyle = { opacity: 0, transform: "none" };
 
   if (activeSegment) {
     const startFrame = Math.floor(activeSegment.start * fps);

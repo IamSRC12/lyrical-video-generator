@@ -1,5 +1,5 @@
 import type { AnimationName } from "@/lib/editor-schema";
-import { interpolate, spring, springOptions } from "remotion";
+import { interpolate, spring } from "remotion";
 
 export type AnimationStyle = {
   opacity: number;

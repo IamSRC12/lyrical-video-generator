@@ -123,15 +123,15 @@ export class EncryptedWebStorage implements SecureStorage {
       const encryptedBytes = base64ToBytes(record.payload);
 
       const decryptedBuffer = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv },
+        { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
         masterKey,
-        encryptedBytes
+        encryptedBytes.buffer as ArrayBuffer
       );
 
       const text = new TextDecoder().decode(decryptedBuffer);
       return JSON.parse(text) as T;
     } catch {
-      // Clear corrupt or un-decryptable payload (e.g., cleared IndexedDB key)
+      // Clear corrupt or un-decryptable payload
       localStorage.removeItem(STORAGE_PREFIX + key);
       return null;
     }
