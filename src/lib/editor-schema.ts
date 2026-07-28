@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const animationSchema = z.enum([
+  "none",
   "fade",
   "slide_up",
   "pop",
@@ -12,28 +13,23 @@ export const animationSchema = z.enum([
 
 export type AnimationName = z.infer<typeof animationSchema>;
 
+export const animationModeSchema = z.enum(["auto", "ai", "manual"]);
+export type AnimationMode = z.infer<typeof animationModeSchema>;
+
+export const wordSourceSchema = z.enum(["groq", "interpolated", "manual"]);
+export type WordSource = z.infer<typeof wordSourceSchema>;
+
 export const timedWordSchema = z.object({
-  word: z.string(),
-  start: z.number().nonnegative(),
-  end: z.number().nonnegative(),
-  confidence: z.number().min(0).max(1).optional()
+  id: z.string(),
+  text: z.string(),
+  normalized: z.string(),
+  start: z.number().finite().nonnegative(),
+  end: z.number().finite().nonnegative(),
+  confidence: z.number().min(0).max(1),
+  source: wordSourceSchema.default("groq")
 });
 
 export type TimedWord = z.infer<typeof timedWordSchema>;
-
-export const lyricSegmentSchema = z.object({
-  id: z.string(),
-  line: z.string(),
-  start: z.number().nonnegative(),
-  end: z.number().nonnegative(),
-  words: z.array(timedWordSchema),
-  animation: animationSchema.default("fade"),
-  animationIntensity: z.number().min(0.1).max(3).default(1),
-  confidence: z.number().min(0).max(1).optional(),
-  requiresReview: z.boolean().default(false)
-});
-
-export type LyricSegment = z.infer<typeof lyricSegmentSchema>;
 
 export const textStyleSchema = z.object({
   fontFamily: z.string().default("Inter"),
@@ -60,9 +56,7 @@ export const textStyleSchema = z.object({
   positionY: z.number().min(0).max(100).default(50),
   maxWidthPercent: z.number().min(20).max(100).default(90),
 
-  textTransform: z
-    .enum(["none", "uppercase", "lowercase"])
-    .default("none"),
+  textTransform: z.enum(["none", "uppercase", "lowercase"]).default("none"),
 
   backgroundColor: z.string().default("#000000"),
   backgroundOpacity: z.number().min(0).max(1).default(0),
@@ -73,25 +67,44 @@ export const textStyleSchema = z.object({
 
 export type TextStyle = z.infer<typeof textStyleSchema>;
 
+export const lyricSegmentSchema = z.object({
+  id: z.string(),
+  lineIndex: z.number().int().nonnegative(),
+  text: z.string(),
+  start: z.number().finite().nonnegative(),
+  end: z.number().finite().nonnegative(),
+  words: z.array(timedWordSchema),
+  alignmentConfidence: z.number().min(0).max(1).default(1),
+  needsReview: z.boolean().default(false),
+  karaokeOverride: z.boolean().optional(),
+  animationMode: animationModeSchema.default("auto"),
+  animation: animationSchema.default("fade"),
+  animationIntensity: z.number().min(0.1).max(3).default(1.0),
+  styleOverride: textStyleSchema.partial().optional()
+});
+
+export type LyricSegment = z.infer<typeof lyricSegmentSchema>;
+
 export const projectSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2).default(2),
+  id: z.string(),
   title: z.string().default("Untitled Lyrical Video"),
-  fps: z.number().int().min(24).max(60).default(30),
-  width: z.union([z.literal(1280), z.literal(1920), z.literal(1080)]).default(1920),
-  height: z.union([z.literal(720), z.literal(1080), z.literal(1920)]).default(1080),
-  duration: z.number().positive(),
-  audioUrl: z.string(),
+  fps: z.literal(60).default(60),
+  width: z.number().int().positive().default(1920),
+  height: z.number().int().positive().default(1080),
+  duration: z.number().finite().positive(),
+  audioAssetId: z.string(),
+  backgroundAssetId: z.string().optional(),
+  audioUrl: z.string().default(""),
   backgroundUrl: z.string().optional(),
   backgroundColor: z.string().default("#090d16"),
-  segments: z.array(lyricSegmentSchema),
-  beats: z.array(z.number().nonnegative()).default([]),
+  karaokeEnabled: z.boolean().default(true),
+  beatSyncEnabled: z.boolean().default(false),
   bpm: z.number().optional(),
+  beatConfidence: z.number().optional(),
+  beats: z.array(z.number().nonnegative()).default([]),
   textStyle: textStyleSchema,
-  toggles: z.object({
-    beatSync: z.boolean().default(false),
-    contextualAnimations: z.boolean().default(true),
-    karaokeHighlight: z.boolean().default(true)
-  })
+  segments: z.array(lyricSegmentSchema)
 });
 
 export type EditorProject = z.infer<typeof projectSchema>;
