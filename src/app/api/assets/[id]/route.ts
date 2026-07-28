@@ -1,4 +1,6 @@
-import {readFile, stat} from "node:fs/promises";
+import {createReadStream} from "node:fs";
+import {stat} from "node:fs/promises";
+import {Readable} from "node:stream";
 import path from "node:path";
 
 export const runtime = "nodejs";
@@ -34,6 +36,15 @@ function getAssetPath(id: string): string | null {
   return path.join(directory, id);
 }
 
+function fileStream(
+  filePath: string,
+  options?: {start?: number; end?: number}
+): ReadableStream<Uint8Array> {
+  return Readable.toWeb(
+    createReadStream(filePath, options)
+  ) as ReadableStream<Uint8Array>;
+}
+
 async function serveAsset(request: Request, id: string, includeBody: boolean) {
   const filePath = getAssetPath(id);
 
@@ -57,9 +68,9 @@ async function serveAsset(request: Request, id: string, includeBody: boolean) {
     const range = request.headers.get("range");
 
     if (!range) {
-      const data = includeBody ? await readFile(filePath) : null;
+      const body = includeBody ? fileStream(filePath) : null;
 
-      return new Response(data, {
+      return new Response(body, {
         status: 200,
         headers: {
           ...commonHeaders,
@@ -107,11 +118,11 @@ async function serveAsset(request: Request, id: string, includeBody: boolean) {
       });
     }
 
-    const data = includeBody
-      ? (await readFile(filePath)).subarray(start, end + 1)
+    const body = includeBody
+      ? fileStream(filePath, {start, end})
       : null;
 
-    return new Response(data, {
+    return new Response(body, {
       status: 206,
       headers: {
         ...commonHeaders,

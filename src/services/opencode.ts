@@ -11,11 +11,11 @@ const responseSchema = z.object({
   )
 });
 
-const resultSchema = z.object({
+const rawResultSchema = z.object({
   animations: z.array(
     z.object({
       id: z.string(),
-      animation: animationSchema
+      animation: z.string()
     })
   )
 });
@@ -52,20 +52,33 @@ export async function generateContextualAnimations(options: {
       },
       body: JSON.stringify({
         model: options.model,
-        temperature: 0.2,
+        temperature: 0.1,
         max_tokens: 2500,
         messages: [
           {
             role: "system",
             content: [
-              "Assign one animation to every lyric line.",
-              "Use the meaning, emotion and intensity of each line.",
-              "Allowed values:",
-              "fade, slide_up, pop, neon_pulse, zoom_blur, rain, shake.",
-              "Avoid assigning the same animation repeatedly.",
-              "Return JSON only in this format:",
-              '{"animations":[{"id":"id","animation":"fade"}]}'
-            ].join(" ")
+              "You are selecting typography entrance animations for a lyrical video.",
+              "Read the whole song in order and use the previous and next lines as context.",
+              "Do not force variety. Repeating the same animation is correct when the emotion stays consistent.",
+              "",
+              "Animation rules:",
+              "- fade: calm, intimate, reflective, neutral, soft or uncertain lines.",
+              "- slide_up: hopeful, rising, moving forward, uplifting or building lines.",
+              "- pop: joyful, playful, catchy, confident or strongly accented words.",
+              "- neon_pulse: electric, nightlife, dreamy, romantic, futuristic or energetic lines.",
+              "- zoom_blur: memory, confusion, longing, distance, dreams or surreal imagery.",
+              "- rain: sadness, grief, loneliness, tears, loss or explicit rain imagery only.",
+              "- shake: anger, fear, violence, panic, impact or extreme intensity only.",
+              "",
+              "Prefer fade when meaning is ambiguous.",
+              "Do not use rain merely because a line is slow.",
+              "Do not use shake unless the line is genuinely intense.",
+              "Return exactly one result for every supplied ID.",
+              "Preserve IDs exactly.",
+              "Return JSON only:",
+              '{"animations":[{"id":"original-id","animation":"fade"}]}'
+            ].join("\n")
           },
           {
             role: "user",
@@ -94,7 +107,22 @@ export async function generateContextualAnimations(options: {
     throw new Error("OpenCode returned an empty response.");
   }
 
-  return resultSchema.parse(
+  const parsed = rawResultSchema.parse(
     JSON.parse(extractJson(content))
-  ).animations;
+  );
+
+  const generated = new Map<string, z.infer<typeof animationSchema>>();
+
+  for (const item of parsed.animations) {
+    const animation = animationSchema.safeParse(item.animation);
+
+    if (animation.success) {
+      generated.set(item.id, animation.data);
+    }
+  }
+
+  return options.lines.map((line) => ({
+    id: line.id,
+    animation: generated.get(line.id) ?? "fade"
+  }));
 }
