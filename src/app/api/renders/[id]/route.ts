@@ -1,6 +1,5 @@
-import {createReadStream} from "node:fs";
-import {stat} from "node:fs/promises";
-import {Readable} from "node:stream";
+
+import {readFile, stat} from "node:fs/promises";
 import path from "node:path";
 
 export const runtime = "nodejs";
@@ -14,15 +13,6 @@ function getRenderPath(id: string): string | null {
     path.resolve(process.env.RENDER_DIRECTORY ?? "./data/renders"),
     id
   );
-}
-
-function fileStream(
-  filePath: string,
-  options?: {start?: number; end?: number}
-): ReadableStream<Uint8Array> {
-  return Readable.toWeb(
-    createReadStream(filePath, options)
-  ) as ReadableStream<Uint8Array>;
 }
 
 async function serveRender(request: Request, id: string, includeBody: boolean) {
@@ -45,10 +35,9 @@ async function serveRender(request: Request, id: string, includeBody: boolean) {
     };
 
     if (!range) {
-      const body = includeBody ? fileStream(filePath) : null;
+      const data = includeBody ? await readFile(filePath) : null;
 
-      return new Response(body, {
-        status: 200,
+      return new Response(data, {
         headers: {
           ...commonHeaders,
           "Content-Length": String(size)
@@ -78,11 +67,11 @@ async function serveRender(request: Request, id: string, includeBody: boolean) {
       });
     }
 
-    const body = includeBody
-      ? fileStream(filePath, {start, end})
+    const data = includeBody
+      ? (await readFile(filePath)).subarray(start, end + 1)
       : null;
 
-    return new Response(body, {
+    return new Response(data, {
       status: 206,
       headers: {
         ...commonHeaders,
@@ -110,3 +99,5 @@ export async function HEAD(
   const {id} = await context.params;
   return serveRender(request, id, false);
 }
+
+

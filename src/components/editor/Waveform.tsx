@@ -1,3 +1,4 @@
+
 "use client";
 
 import {useEffect, useRef} from "react";
@@ -156,3 +157,5 @@ export function Waveform({audioUrl, playhead, duration, beats = [], onSeek}: Wav
     </div>
   );
 }
+
+

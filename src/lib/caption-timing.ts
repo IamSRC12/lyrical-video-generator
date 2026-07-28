@@ -1,3 +1,4 @@
+
 import type {LyricSegment} from "./editor-schema";
 
 export function getActiveSegment(
@@ -33,3 +34,5 @@ export function getHighlightedWordIndex(
 
   return result;
 }
+
+

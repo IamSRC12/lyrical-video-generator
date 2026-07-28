@@ -1,6 +1,6 @@
+
 import {alignLyricsToWords} from "@/lib/alignment";
 import {requireUser} from "@/lib/auth-guard";
-import {cleanLyrics} from "@/lib/lyrics-cleaning";
 import {transcribeWithGroq} from "@/services/groq";
 
 export const runtime = "nodejs";
@@ -38,14 +38,11 @@ export async function POST(request: Request) {
       return Response.json({message: "Groq API key is missing."}, {status: 400});
     }
 
-    const groqAttachmentLimit = 25 * 1024 * 1024;
+    const maxBytes = Number(process.env.MAX_UPLOAD_BYTES ?? 100_000_000);
 
-    if (file.size > groqAttachmentLimit) {
+    if (file.size > maxBytes) {
       return Response.json(
-        {
-          message:
-            "Direct Groq transcription uploads cannot exceed 25 MB. Compress the audio to 16 kHz mono FLAC or implement URL/chunked transcription."
-        },
+        {message: `Audio exceeds the ${maxBytes} byte application limit.`},
         {status: 413}
       );
     }
@@ -57,39 +54,23 @@ export async function POST(request: Request) {
       );
     }
 
-    const cleanedLyrics = cleanLyrics(lyrics);
-
-    const prompt = cleanedLyrics.text
-      .split(/\s+/)
-      .slice(0, 180)
-      .join(" ");
-
     const transcription = await transcribeWithGroq({
       apiKey,
       file,
-      prompt
+      prompt: lyrics.slice(0, 800)
     });
 
+    const segments = alignLyricsToWords(lyrics, transcription.words);
     const finalWord = transcription.words.at(-1);
-
-    const duration = Math.max(
-      transcription.duration ?? 0,
-      finalWord?.end ?? 0,
-      1
-    );
-
-    const segments = alignLyricsToWords(
-      cleanedLyrics.text,
-      transcription.words,
-      duration
-    );
 
     return Response.json({
       transcript: transcription.text ?? "",
-      duration: Math.max(duration, segments.at(-1)?.end ?? 0),
-      segments,
-      removedLines: cleanedLyrics.removedLines,
-      cleanedLyrics: cleanedLyrics.text
+      duration:
+        transcription.duration ??
+        finalWord?.end ??
+        segments.at(-1)?.end ??
+        1,
+      segments
     });
   } catch (error) {
     if (error instanceof Response) return error;
@@ -105,3 +86,5 @@ export async function POST(request: Request) {
     );
   }
 }
+
+

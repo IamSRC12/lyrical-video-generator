@@ -1,7 +1,7 @@
+
 export type BeatAnalysis = {
   bpm: number;
   beats: number[];
-  duration: number;
 };
 
 export async function detectBeats(file: File): Promise<BeatAnalysis> {
@@ -65,68 +65,12 @@ export async function detectBeats(file: File): Promise<BeatAnalysis> {
   while (bpm < 70) bpm *= 2;
   while (bpm > 180) bpm /= 2;
 
-  const duration = buffer.duration;
-  const period = 60 / bpm;
-
-  function distanceToGrid(time: number, phase: number): number {
-    const position = ((time - phase) % period + period) % period;
-    return Math.min(position, period - position);
-  }
-
-  const phaseCandidates = candidateBeats.slice(
-    0,
-    Math.min(candidateBeats.length, 80)
-  );
-
-  let bestPhase = phaseCandidates[0] ?? 0;
-  let bestScore = -Infinity;
-
-  for (const phaseCandidate of phaseCandidates) {
-    const phase =
-      ((phaseCandidate % period) + period) % period;
-
-    let score = 0;
-
-    for (const onset of candidateBeats) {
-      const distance = distanceToGrid(onset, phase);
-      score += Math.exp(-((distance / 0.07) ** 2));
-    }
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestPhase = phase;
-    }
-  }
-
-  const beatGrid: number[] = [];
-
-  for (let beat = bestPhase; beat <= duration; beat += period) {
-    let snapped = beat;
-    let nearestDistance = 0.09;
-
-    for (const onset of candidateBeats) {
-      const distance = Math.abs(onset - beat);
-
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        snapped = onset;
-      }
-    }
-
-    if (
-      snapped >= 0 &&
-      snapped <= duration &&
-      snapped - (beatGrid.at(-1) ?? -Infinity) > period * 0.55
-    ) {
-      beatGrid.push(snapped);
-    }
-  }
-
   await context.close();
 
   return {
     bpm: Math.round(bpm),
-    beats: beatGrid.sort((a, b) => a - b),
-    duration
+    beats: candidateBeats
   };
 }
+
+

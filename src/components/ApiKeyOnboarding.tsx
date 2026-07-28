@@ -1,3 +1,4 @@
+
 "use client";
 
 import {useEffect, useState} from "react";
@@ -83,14 +84,7 @@ export function ApiKeyOnboarding() {
         throw failure?.reason ?? new Error("API-key validation failed.");
       }
 
-      await apiKeyStorage.set({
-        groq,
-        provider: "opencode",
-        opencode,
-        opencodeModel,
-        nvidia: "",
-        nvidiaModel: "meta/llama-3.3-70b-instruct"
-      });
+      await apiKeyStorage.set({groq, opencode, opencodeModel});
       await soundManager.beep(720);
 
       toast.success("API keys validated and encrypted locally.");
@@ -175,3 +169,5 @@ export function ApiKeyOnboarding() {
     </section>
   );
 }
+
+

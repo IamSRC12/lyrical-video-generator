@@ -1,43 +1,24 @@
-import fs from "node:fs";
+
 import path from "node:path";
-import {
-  getProjectRootDir,
-  getRemotionBundlePath,
-  getOrBuildRemotionBundle
-} from "./remotion-bundle-helper";
 
-export {
-  getProjectRootDir,
-  getRemotionBundlePath,
-  getOrBuildRemotionBundle
-};
+/**
+ * Server-side rendering service.
+ * The Remotion bundle must be pre-built during `npm run build:remotion`.
+ * This module provides helpers for the export API route.
+ */
 
-export function getRenderOutputDirectory(): string {
+export function getRemotionBundlePath(): string {
   return path.resolve(
-    getProjectRootDir(),
-    process.env.RENDER_DIRECTORY ?? "./data/renders"
+    process.env.REMOTION_BUNDLE_DIRECTORY ?? "./remotion-bundle"
   );
 }
 
-export function getRenderConcurrency(): string | number {
-  const val = process.env.RENDER_CONCURRENCY?.trim();
-  if (!val) return "50%";
-  if (/^\d+%$/.test(val)) return val;
-
-  const parsedNum = parseInt(val, 10);
-  if (Number.isInteger(parsedNum) && parsedNum > 0) {
-    return parsedNum;
-  }
-
-  return "50%";
+export function getRenderOutputDirectory(): string {
+  return path.resolve(process.env.RENDER_DIRECTORY ?? "./data/renders");
 }
 
-export function getBrowserExecutable(): string | undefined {
-  const chromiumPath = process.env.CHROMIUM_PATH?.trim();
-  if (chromiumPath && fs.existsSync(chromiumPath)) {
-    return chromiumPath;
-  }
-  return undefined;
+export function getRenderConcurrency(): string {
+  return process.env.RENDER_CONCURRENCY ?? "75%";
 }
 
 export type RenderRequest = {
@@ -50,3 +31,5 @@ export type RenderResult = {
   url: string;
   durationMs: number;
 };
+
+

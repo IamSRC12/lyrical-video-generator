@@ -1,3 +1,4 @@
+
 import {UploadAndAlign} from "@/components/UploadAndAlign";
 
 export default function UploadPage() {
@@ -7,4 +8,6 @@ export default function UploadPage() {
     </main>
   );
 }
+
+
 

@@ -1,3 +1,4 @@
+
 import type {SecureStorage} from "./storage";
 
 const DB_NAME = "lyrical-studio-secure";
@@ -116,3 +117,5 @@ export class EncryptedWebStorage implements SecureStorage {
 }
 
 export const secureStorage = new EncryptedWebStorage();
+
+

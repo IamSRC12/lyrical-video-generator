@@ -1,3 +1,4 @@
+
 import type {Metadata} from "next";
 import {Toaster} from "sonner";
 import {Providers} from "@/components/Providers";
@@ -49,3 +50,5 @@ export default function RootLayout({
     </html>
   );
 }
+
+

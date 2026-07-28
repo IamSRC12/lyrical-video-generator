@@ -1,12 +1,15 @@
+
 import {bundle} from "@remotion/bundler";
 import {rm} from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
+import {fileURLToPath} from "node:url";
 
-const rootDir = process.cwd();
-const entryPoint = path.resolve(rootDir, "src/remotion/index.ts");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const entryPoint = path.resolve(__dirname, "../src/remotion/index.ts");
 const outDir = path.resolve(
-  rootDir,
+  __dirname,
+  "..",
   process.env.REMOTION_BUNDLE_DIRECTORY ?? "remotion-bundle"
 );
 
@@ -26,7 +29,7 @@ try {
         ...(config.resolve || {}),
         alias: {
           ...(config.resolve?.alias || {}),
-          "@": path.resolve(rootDir, "src")
+          "@": path.resolve(__dirname, "../src")
         }
       }
     })
@@ -35,5 +38,7 @@ try {
   console.log(`Remotion bundle created at: ${bundlePath}`);
 } catch (error) {
   console.error("Failed to build Remotion bundle:", error);
-  process.exit(1);
+  process.exitCode = 1;
 }
+
+

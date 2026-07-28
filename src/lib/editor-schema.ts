@@ -1,3 +1,4 @@
+
 import {z} from "zod";
 
 export const animationSchema = z.enum([
@@ -26,11 +27,7 @@ export const lyricSegmentSchema = z.object({
   start: z.number().nonnegative(),
   end: z.number().nonnegative(),
   words: z.array(timedWordSchema),
-  animation: animationSchema.default("fade"),
-  confidence: z.number().min(0).max(1).default(1),
-  source: z
-    .enum(["provided", "transcribed", "ai-recovered"])
-    .default("provided")
+  animation: animationSchema.default("fade")
 });
 
 export type LyricSegment = z.infer<typeof lyricSegmentSchema>;
@@ -65,19 +62,6 @@ export const textStyleSchema = z.object({
   borderRadius: z.number().min(0).max(100).default(12)
 });
 
-const urlOrRelativePathSchema = z
-  .string()
-  .min(1)
-  .refine((val) => {
-    if (val.startsWith("/")) return true;
-    try {
-      new URL(val);
-      return true;
-    } catch {
-      return false;
-    }
-  }, "Must be a valid URL or relative path (e.g. /api/assets/...)");
-
 export const projectSchema = z.object({
   version: z.literal(1),
   title: z.string().default("Untitled lyrical video"),
@@ -85,8 +69,8 @@ export const projectSchema = z.object({
   width: z.union([z.literal(1280), z.literal(1920)]).default(1920),
   height: z.union([z.literal(720), z.literal(1080)]).default(1080),
   duration: z.number().positive(),
-  audioUrl: urlOrRelativePathSchema,
-  backgroundUrl: urlOrRelativePathSchema.optional(),
+  audioUrl: z.string().url(),
+  backgroundUrl: z.string().url().optional(),
   backgroundColor: z.string().default("#111827"),
   segments: z.array(lyricSegmentSchema),
   beats: z.array(z.number().nonnegative()).default([]),
@@ -101,3 +85,5 @@ export const projectSchema = z.object({
 export type EditorProject = z.infer<typeof projectSchema>;
 
 export const defaultTextStyle = textStyleSchema.parse({});
+
+

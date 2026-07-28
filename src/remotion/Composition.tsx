@@ -1,17 +1,15 @@
-import React, {useEffect} from "react";
+
+import React from "react";
 import {
   AbsoluteFill,
+  Audio,
   Img,
   useCurrentFrame,
-  useVideoConfig,
-  delayRender,
-  continueRender
+  useVideoConfig
 } from "remotion";
-import {Audio} from "@remotion/media";
 import type {EditorProject} from "../lib/editor-schema";
 import {getAnimationStyle} from "./animations";
 import {getActiveSegment, getHighlightedWordIndex} from "../lib/caption-timing";
-import {getRhythmPulse} from "../lib/beat-sync";
 
 type CompositionProps = {
   project: EditorProject;
@@ -23,26 +21,6 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const currentTime = frame / fps;
-
-  useEffect(() => {
-    const fontUrl = project.textStyle.fontUrl;
-    if (!fontUrl) return;
-
-    const handle = delayRender("Loading custom font");
-    const fontName = project.textStyle.fontFamily || "CustomFont";
-
-    const font = new FontFace(fontName, `url(${fontUrl})`);
-    font
-      .load()
-      .then((loadedFont) => {
-        document.fonts.add(loadedFont);
-        continueRender(handle);
-      })
-      .catch((err) => {
-        console.error("Failed to load custom font:", err);
-        continueRender(handle);
-      });
-  }, [project.textStyle.fontUrl, project.textStyle.fontFamily]);
 
   const activeSegment = getActiveSegment(project.segments, currentTime);
 
@@ -63,12 +41,6 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
     : -1;
 
   const style = project.textStyle;
-
-  const rhythmPulse = project.toggles.beatSync
-    ? getRhythmPulse(project.beats, currentTime)
-    : 0;
-
-  const rhythmScale = 1 + rhythmPulse * 0.035;
 
   return (
     <AbsoluteFill>
@@ -95,14 +67,7 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
       </AbsoluteFill>
 
       {/* Audio */}
-      <Audio
-        src={project.audioUrl}
-        requestInit={{cache: "no-store"}}
-        onError={(error) => {
-          console.error("Render audio error:", error.message);
-          return "fail";
-        }}
-      />
+      <Audio src={project.audioUrl} />
 
       {/* Lyrics Container */}
       {activeSegment && (
@@ -111,7 +76,7 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
             position: "absolute",
             left: `${style.positionX}%`,
             top: `${style.positionY}%`,
-            transform: `translate(-50%, -50%) scale(${rhythmScale}) ${animStyle.transform}`,
+            transform: `translate(-50%, -50%) ${animStyle.transform}`,
             opacity: animStyle.opacity,
             filter: animStyle.filter,
             textAlign: style.align,
@@ -132,12 +97,7 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
               letterSpacing: `${style.letterSpacing}px`,
               textTransform: style.textTransform,
               color: style.color,
-              textShadow:
-                rhythmPulse > 0
-                  ? `${style.shadow}, 0 0 ${12 + rhythmPulse * 20}px ${
-                      style.highlightColor
-                    }`
-                  : animStyle.textShadow ?? style.shadow,
+              textShadow: animStyle.textShadow ?? style.shadow,
               WebkitTextStroke: `${style.outlineWidth}px ${style.outlineColor}`,
               margin: 0
             }}
@@ -161,6 +121,34 @@ export const LyricalVideoComposition: React.FC<CompositionProps> = ({
           </p>
         </div>
       )}
+
+      {/* Beat sync flash overlay */}
+      {project.toggles.beatSync && (() => {
+        const nearestBeat = project.beats.reduce(
+          (closest, beat) =>
+            Math.abs(beat - currentTime) < Math.abs(closest - currentTime)
+              ? beat
+              : closest,
+          Infinity
+        );
+
+        const beatDistance = Math.abs(currentTime - nearestBeat);
+        const flashOpacity =
+          beatDistance < 0.08
+            ? (1 - beatDistance / 0.08) * 0.12
+            : 0;
+
+        return flashOpacity > 0 ? (
+          <AbsoluteFill
+            style={{
+              backgroundColor: `rgba(139, 92, 246, ${flashOpacity})`,
+              pointerEvents: "none"
+            }}
+          />
+        ) : null;
+      })()}
     </AbsoluteFill>
   );
 };
+
+
