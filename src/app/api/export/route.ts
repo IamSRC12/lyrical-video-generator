@@ -1,50 +1,31 @@
 import { requireAuth } from "@/lib/auth-guard";
 import { projectSchema } from "@/lib/editor-schema";
-import { renderProjectVideo } from "@/services/render";
+import { createExportJob, processExportJob } from "@/services/render";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
-  const { response } = await requireAuth();
+  const { session, response } = await requireAuth();
   if (response) return response;
 
   try {
     const body = await request.json();
     const project = projectSchema.parse(body.project);
 
-    const encoder = new TextEncoder();
+    const userId = session?.user?.id || "anonymous";
+    const job = createExportJob(userId, project.id || "default-project");
 
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        const sendEvent = (data: Record<string, unknown>) => {
-          controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
-        };
-
-        try {
-          sendEvent({ type: "progress", progress: 0.02 });
-
-          const result = await renderProjectVideo(project, (progress) => {
-            sendEvent({ type: "progress", progress });
-          });
-
-          const downloadUrl = `/api/assets/${result.filename}`;
-          sendEvent({ type: "done", url: downloadUrl, filename: result.filename });
-          controller.close();
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Render failed";
-          sendEvent({ type: "error", error: message });
-          controller.close();
-        }
-      }
+    // Launch export processing in background without blocking response
+    processExportJob(job.id, project).catch((err) => {
+      console.error(`Export job ${job.id} failed:`, err);
     });
 
-    return new Response(readableStream, {
-      headers: {
-        "Content-Type": "application/x-ndjson",
-        "Cache-Control": "no-cache"
-      }
+    return NextResponse.json({
+      jobId: job.id,
+      status: job.status,
+      message: "Export job enqueued successfully."
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Invalid project export request";
+    const message = error instanceof Error ? error.message : "Invalid export job request";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

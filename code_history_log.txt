@@ -1,4 +1,387 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 01:06:45
+FILE PATH: src/app/api/export/route.ts
+ACTION: Modified
+================================================================================
+import { requireAuth } from "@/lib/auth-guard";
+import { projectSchema } from "@/lib/editor-schema";
+import { createExportJob, processExportJob } from "@/services/render";
+import { NextResponse } from "next/server";
+
+export async function POST(request: Request) {
+  const { session, response } = await requireAuth();
+  if (response) return response;
+
+  try {
+    const body = await request.json();
+    const project = projectSchema.parse(body.project);
+
+    const userId = session?.user?.id || "anonymous";
+    const job = createExportJob(userId, project.id || "default-project");
+
+    // Launch export processing in background without blocking response
+    processExportJob(job.id, project).catch((err) => {
+      console.error(`Export job ${job.id} failed:`, err);
+    });
+
+    return NextResponse.json({
+      jobId: job.id,
+      status: job.status,
+      message: "Export job enqueued successfully."
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid export job request";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:06:36
+FILE PATH: src/services/render.ts
+ACTION: Modified
+================================================================================
+import type { EditorProject } from "@/lib/editor-schema";
+import { renderMedia, selectComposition } from "@remotion/renderer";
+import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+
+export function getRemotionBundlePath(): string {
+  return path.resolve(
+    process.env.REMOTION_BUNDLE_DIRECTORY ?? "./remotion-bundle"
+  );
+}
+
+export function getRenderOutputDirectory(): string {
+  return path.resolve(process.env.RENDER_DIRECTORY ?? "./data/renders");
+}
+
+export type ExportJob = {
+  id: string;
+  userId: string;
+  projectId: string;
+  status: "queued" | "rendering" | "completed" | "failed";
+  progress: number;
+  outputAssetId?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+const exportJobs = new Map<string, ExportJob>();
+
+export function getExportJob(jobId: string): ExportJob | undefined {
+  return exportJobs.get(jobId);
+}
+
+export function createExportJob(userId: string, projectId: string): ExportJob {
+  const job: ExportJob = {
+    id: `job_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+    userId,
+    projectId,
+    status: "queued",
+    progress: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  exportJobs.set(job.id, job);
+  return job;
+}
+
+export async function processExportJob(jobId: string, project: EditorProject): Promise<void> {
+  const job = exportJobs.get(jobId);
+  if (!job) return;
+
+  const bundlePath = getRemotionBundlePath();
+  if (!existsSync(bundlePath)) {
+    job.status = "failed";
+    job.error = `Remotion bundle directory not found at "${bundlePath}". Please execute "npm run build:remotion" prior to starting production server.`;
+    job.updatedAt = Date.now();
+    return;
+  }
+
+  const outputDir = getRenderOutputDirectory();
+  await mkdir(outputDir, { recursive: true });
+
+  const renderId = `video_${Date.now()}_${crypto.randomUUID().slice(0, 8)}.mp4`;
+  const outputPath = path.join(outputDir, renderId);
+
+  job.status = "rendering";
+  job.progress = 0.05;
+  job.updatedAt = Date.now();
+
+  try {
+    const composition = await selectComposition({
+      serveUrl: bundlePath,
+      id: "LyricalVideo",
+      inputProps: { project }
+    });
+
+    const fps = 60;
+    const durationInFrames = Math.max(
+      1,
+      Math.ceil((project.duration || 10) * fps)
+    );
+
+    await renderMedia({
+      composition: {
+        ...composition,
+        durationInFrames,
+        width: project.width || 1920,
+        height: project.height || 1080,
+        fps
+      },
+      serveUrl: bundlePath,
+      codec: "h264",
+      outputLocation: outputPath,
+      inputProps: { project },
+      onProgress: ({ progress }) => {
+        job.progress = Math.min(0.99, Math.max(0.05, progress));
+        job.updatedAt = Date.now();
+      }
+    });
+
+    job.status = "completed";
+    job.progress = 1.0;
+    job.outputAssetId = renderId;
+    job.updatedAt = Date.now();
+  } catch (err) {
+    job.status = "failed";
+    job.error = err instanceof Error ? err.message : "Video rendering failed";
+    job.updatedAt = Date.now();
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:06:21
+FILE PATH: src/app/api/test-services/route.ts
+ACTION: Created
+================================================================================
+import { requireAuth } from "@/lib/auth-guard";
+import { getRemotionBundlePath, getRenderOutputDirectory } from "@/services/render";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile, rm } from "node:fs/promises";
+import path from "node:path";
+import { NextResponse } from "next/server";
+
+export type ServiceTestResult = {
+  service: "groq" | "opencode" | "assets" | "export";
+  ok: boolean;
+  latencyMs: number;
+  message: string;
+  details?: Record<string, string | number | boolean>;
+};
+
+export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
+  try {
+    const customGroqKey = request.headers.get("x-groq-key");
+    const customOpencodeKey = request.headers.get("x-opencode-key");
+
+    const groqApiKey = customGroqKey || process.env.GROQ_API_KEY;
+    const opencodeApiKey = customOpencodeKey || process.env.OPENCODE_API_KEY;
+
+    const results: ServiceTestResult[] = [];
+
+    // 1. Test Groq API (Minimal authenticated models list)
+    const groqStart = Date.now();
+    if (!groqApiKey) {
+      results.push({
+        service: "groq",
+        ok: false,
+        latencyMs: Date.now() - groqStart,
+        message: "No Groq API key configured on server or in browser storage."
+      });
+    } else {
+      try {
+        const groqUrl = `${process.env.GROQ_BASE_URL ?? "https://api.groq.com/openai/v1"}/models`;
+        const groqRes = await fetch(groqUrl, {
+          headers: { Authorization: `Bearer ${groqApiKey}` },
+          signal: AbortSignal.timeout(10000)
+        });
+        const latency = Date.now() - groqStart;
+
+        if (groqRes.ok) {
+          results.push({
+            service: "groq",
+            ok: true,
+            latencyMs: latency,
+            message: "Groq API key verified successfully.",
+            details: { status: groqRes.status }
+          });
+        } else {
+          results.push({
+            service: "groq",
+            ok: false,
+            latencyMs: latency,
+            message: `Groq authentication failed (HTTP ${groqRes.status})`
+          });
+        }
+      } catch (err) {
+        results.push({
+          service: "groq",
+          ok: false,
+          latencyMs: Date.now() - groqStart,
+          message: err instanceof Error ? err.message : "Groq connection failed"
+        });
+      }
+    }
+
+    // 2. Test OpenCode / DeepSeek API
+    const opencodeStart = Date.now();
+    if (!opencodeApiKey) {
+      results.push({
+        service: "opencode",
+        ok: false,
+        latencyMs: Date.now() - opencodeStart,
+        message: "No OpenCode/DeepSeek API key configured on server or in browser storage."
+      });
+    } else {
+      try {
+        const baseUrl = (process.env.OPENCODE_BASE_URL || "https://api.deepseek.com/v1").replace(/\/+$/, "");
+        const model = process.env.OPENCODE_MODEL || "deepseek-v4-flash";
+        const ocUrl = `${baseUrl}/models`;
+
+        const ocRes = await fetch(ocUrl, {
+          headers: { Authorization: `Bearer ${opencodeApiKey}` },
+          signal: AbortSignal.timeout(10000)
+        });
+        const latency = Date.now() - opencodeStart;
+
+        if (ocRes.ok) {
+          results.push({
+            service: "opencode",
+            ok: true,
+            latencyMs: latency,
+            message: `DeepSeek provider endpoint reached using model "${model}".`,
+            details: { model, status: ocRes.status }
+          });
+        } else {
+          results.push({
+            service: "opencode",
+            ok: false,
+            latencyMs: latency,
+            message: `OpenCode/DeepSeek auth failed (HTTP ${ocRes.status})`
+          });
+        }
+      } catch (err) {
+        results.push({
+          service: "opencode",
+          ok: false,
+          latencyMs: Date.now() - opencodeStart,
+          message: err instanceof Error ? err.message : "DeepSeek connection failed"
+        });
+      }
+    }
+
+    // 3. Test Asset Storage Read/Write
+    const assetStart = Date.now();
+    try {
+      const storageDir = path.resolve(process.env.ASSET_STORAGE_PATH ?? "./data/assets");
+      await mkdir(storageDir, { recursive: true });
+      const testFile = path.join(storageDir, `.health_check_${Date.now()}.tmp`);
+      await writeFile(testFile, "OK");
+      await rm(testFile, { force: true });
+
+      results.push({
+        service: "assets",
+        ok: true,
+        latencyMs: Date.now() - assetStart,
+        message: "Asset storage directory writable.",
+        details: { path: storageDir }
+      });
+    } catch (err) {
+      results.push({
+        service: "assets",
+        ok: false,
+        latencyMs: Date.now() - assetStart,
+        message: err instanceof Error ? err.message : "Asset storage write failed"
+      });
+    }
+
+    // 4. Test Export Environment & Remotion Bundle Readiness
+    const exportStart = Date.now();
+    const bundlePath = getRemotionBundlePath();
+    const renderDir = getRenderOutputDirectory();
+    const bundleExists = existsSync(bundlePath);
+
+    if (bundleExists) {
+      results.push({
+        service: "export",
+        ok: true,
+        latencyMs: Date.now() - exportStart,
+        message: "Prebuilt Remotion bundle and render directory verified.",
+        details: { bundlePath, renderDir, fps: 60 }
+      });
+    } else {
+      results.push({
+        service: "export",
+        ok: false,
+        latencyMs: Date.now() - exportStart,
+        message: `Remotion bundle not found at "${bundlePath}". Execute "npm run build:remotion" prior to rendering.`
+      });
+    }
+
+    return NextResponse.json({ results });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Diagnostics test error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 01:06:09
+FILE PATH: src/services/api-keys.ts
+ACTION: Modified
+================================================================================
+import { secureStorage } from "./encrypted-web-storage";
+
+const GROQ_KEY_NAME = "groq_api_key";
+const OPENCODE_KEY_NAME = "opencode_api_key";
+
+export async function getStoredGroqKey(): Promise<string | null> {
+  return secureStorage.get<string>(GROQ_KEY_NAME);
+}
+
+export async function setStoredGroqKey(key: string): Promise<void> {
+  if (!key.trim()) {
+    await secureStorage.remove(GROQ_KEY_NAME);
+    return;
+  }
+  await secureStorage.set(GROQ_KEY_NAME, key.trim());
+}
+
+export async function clearStoredGroqKey(): Promise<void> {
+  await secureStorage.remove(GROQ_KEY_NAME);
+}
+
+export async function getStoredOpencodeKey(): Promise<string | null> {
+  return secureStorage.get<string>(OPENCODE_KEY_NAME);
+}
+
+export async function setStoredOpencodeKey(key: string): Promise<void> {
+  if (!key.trim()) {
+    await secureStorage.remove(OPENCODE_KEY_NAME);
+    return;
+  }
+  await secureStorage.set(OPENCODE_KEY_NAME, key.trim());
+}
+
+export async function clearStoredOpencodeKey(): Promise<void> {
+  await secureStorage.remove(OPENCODE_KEY_NAME);
+}
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 01:05:58
 FILE PATH: src/app/api/opencode/animations/route.ts
 ACTION: Created
