@@ -1,34 +1,34 @@
-FROM node:22-slim
+FROM node:22-slim AS base
 
-# Install Chrome dependencies for Remotion
-RUN apt-get update && apt-get install -y \
+# Install FFmpeg, Chromium, and system fonts for Remotion video rendering
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
     chromium \
-    fonts-noto-cjk \
+    fonts-liberation \
+    fonts-roboto \
     fonts-noto-color-emoji \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV CHROMIUM_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
-ENV CHROMIUM_PATH=/usr/bin/chromium
-ENV RENDER_CONCURRENCY=50%
+# Copy dependency definitions
+COPY package.json package-lock.json ./
+RUN npm ci
 
-# Install dependencies
-COPY package.json package-lock.json* ./
-RUN npm ci --production=false
-
-# Copy source
+# Copy source files
 COPY . .
 
-# Build Remotion bundle and Next.js
+# Pre-build Remotion bundle and Next.js app
+RUN npm run build:remotion
 RUN npm run build
-
-# Create data directories
-RUN mkdir -p data/assets data/renders
 
 EXPOSE 3000
 
 ENV NODE_ENV=production
-ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
-CMD ["npm", "start"]
+CMD ["npm", "run", "start"]

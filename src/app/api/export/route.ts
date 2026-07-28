@@ -1,85 +1,50 @@
-import {requireUser} from "@/lib/auth-guard";
-import {
-  getRemotionBundlePath,
-  getRenderOutputDirectory,
-  getRenderConcurrency
-} from "@/services/render";
-import {projectSchema} from "@/lib/editor-schema";
-import {mkdir} from "node:fs/promises";
-import path from "node:path";
-
-export const runtime = "nodejs";
-export const maxDuration = 600;
+import { requireAuth } from "@/lib/auth-guard";
+import { projectSchema } from "@/lib/editor-schema";
+import { renderProjectVideo } from "@/services/render";
+import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
-  try {
-    await requireUser();
+  const { response } = await requireAuth();
+  if (response) return response;
 
+  try {
     const body = await request.json();
     const project = projectSchema.parse(body.project);
 
-    const bundlePath = getRemotionBundlePath();
-    const outputDir = getRenderOutputDirectory();
-    const concurrency = getRenderConcurrency();
+    const encoder = new TextEncoder();
 
-    await mkdir(outputDir, {recursive: true});
+    const readableStream = new ReadableStream({
+      async start(controller) {
+        const sendEvent = (data: Record<string, unknown>) => {
+          controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
+        };
 
-    const outputFilename = `${crypto.randomUUID()}.mp4`;
-    const outputPath = path.join(outputDir, outputFilename);
+        try {
+          sendEvent({ type: "progress", progress: 0.02 });
 
-    const {renderMedia, selectComposition} = await import(
-      "@remotion/renderer"
-    );
+          const result = await renderProjectVideo(project, (progress) => {
+            sendEvent({ type: "progress", progress });
+          });
 
-    const composition = await selectComposition({
-      serveUrl: bundlePath,
-      id: "LyricalVideo",
-      inputProps: {project}
-    });
-
-    const startTime = Date.now();
-
-    await renderMedia({
-      composition,
-      serveUrl: bundlePath,
-      codec: "h264",
-      audioCodec: "aac",
-      outputLocation: outputPath,
-      inputProps: {project},
-      concurrency,
-      crf: 18,
-      pixelFormat: "yuv420p",
-      x264Preset: "medium",
-      overwrite: true,
-      browserExecutable: process.env.CHROMIUM_PATH || undefined,
-      chromiumOptions: {
-        enableMultiProcessOnLinux: true
-      },
-      onProgress: ({progress}) => {
-        console.log(`Render progress: ${Math.round(progress * 100)}%`);
+          const downloadUrl = `/api/assets/${result.filename}`;
+          sendEvent({ type: "done", url: downloadUrl, filename: result.filename });
+          controller.close();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Render failed";
+          sendEvent({ type: "error", error: message });
+          controller.close();
+        }
       }
     });
 
-    const durationMs = Date.now() - startTime;
-    const baseUrl =
-      process.env.APP_BASE_URL ?? "http://localhost:3000";
-
-    return Response.json({
-      url: `${baseUrl}/api/renders/${encodeURIComponent(outputFilename)}`,
-      durationMs,
-      outputFilename
+    return new Response(readableStream, {
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Cache-Control": "no-cache"
+      }
     });
   } catch (error) {
-    if (error instanceof Response) return error;
-
-    console.error("Export error:", error);
-
-    return Response.json(
-      {
-        message:
-          error instanceof Error ? error.message : "Export failed."
-      },
-      {status: 500}
-    );
+    const message = error instanceof Error ? error.message : "Invalid project export request";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
