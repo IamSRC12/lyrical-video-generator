@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   FileAudio,
+  FlaskConical,
   Key,
   LoaderCircle,
   Music2,
@@ -19,7 +20,7 @@ import {
   XCircle
 } from "lucide-react";
 import {toast} from "sonner";
-import {apiKeyStorage, type ApiCredentials} from "@/services/api-keys";
+import {apiKeyStorage} from "@/services/api-keys";
 import {uploadAsset} from "@/services/asset-client";
 import {detectBeats} from "@/lib/beat-detection";
 import {soundManager} from "@/services/sound-manager";
@@ -120,6 +121,29 @@ export function UploadAndAlign() {
     },
     [handleFile]
   );
+
+  async function testIndividualKey(provider: "groq" | "opencode") {
+    const key = provider === "groq" ? groqKey : opencodeKey;
+    const setStatus = provider === "groq" ? setGroqStatus : setOpencodeStatus;
+    const name = provider === "groq" ? "Groq" : "OpenCode";
+
+    if (!key.trim()) {
+      toast.error(`Please enter a ${name} API key first.`);
+      return;
+    }
+
+    try {
+      setStatus("testing");
+      toast.info(`Testing ${name} API key...`);
+      await validateKey(provider, key.trim());
+      setStatus("valid");
+      await soundManager.beep(720);
+      toast.success(`${name} API key is valid & working!`);
+    } catch (err) {
+      setStatus("invalid");
+      toast.error(err instanceof Error ? err.message : `${name} validation failed.`);
+    }
+  }
 
   async function saveSettings(): Promise<boolean> {
     if (!groqKey.trim() || !opencodeKey.trim()) {
@@ -331,9 +355,9 @@ export function UploadAndAlign() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Groq Key Input */}
-            <div className="space-y-1.5">
-              <label className="label text-xs flex justify-between">
-                <span>Groq API Key (Whisper Speech-to-Text)</span>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="label text-xs">Groq API Key (Whisper STT)</label>
                 {groqStatus === "valid" && (
                   <span className="text-emerald-400 text-[10px] flex items-center gap-1">
                     <CheckCircle2 size={12} /> Valid
@@ -344,7 +368,7 @@ export function UploadAndAlign() {
                     <XCircle size={12} /> Invalid
                   </span>
                 )}
-              </label>
+              </div>
               <div className="relative">
                 <input
                   type={showGroqKey ? "text" : "password"}
@@ -364,12 +388,25 @@ export function UploadAndAlign() {
                   {showGroqKey ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
               </div>
+              <button
+                type="button"
+                className="button-ghost px-2.5 py-1 text-xs text-violet-400 hover:bg-violet-500/10 flex items-center gap-1.5"
+                disabled={groqStatus === "testing" || !groqKey}
+                onClick={() => testIndividualKey("groq")}
+              >
+                {groqStatus === "testing" ? (
+                  <LoaderCircle size={13} className="animate-spin" />
+                ) : (
+                  <FlaskConical size={13} />
+                )}
+                <span>Test Groq Key</span>
+              </button>
             </div>
 
             {/* OpenCode Key Input */}
-            <div className="space-y-1.5">
-              <label className="label text-xs flex justify-between">
-                <span>OpenCode Zen API Key (AI Animations)</span>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="label text-xs">OpenCode Zen API Key (AI Animations)</label>
                 {opencodeStatus === "valid" && (
                   <span className="text-emerald-400 text-[10px] flex items-center gap-1">
                     <CheckCircle2 size={12} /> Valid
@@ -380,7 +417,7 @@ export function UploadAndAlign() {
                     <XCircle size={12} /> Invalid
                   </span>
                 )}
-              </label>
+              </div>
               <div className="relative">
                 <input
                   type={showOpencodeKey ? "text" : "password"}
@@ -400,6 +437,19 @@ export function UploadAndAlign() {
                   {showOpencodeKey ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
               </div>
+              <button
+                type="button"
+                className="button-ghost px-2.5 py-1 text-xs text-violet-400 hover:bg-violet-500/10 flex items-center gap-1.5"
+                disabled={opencodeStatus === "testing" || !opencodeKey}
+                onClick={() => testIndividualKey("opencode")}
+              >
+                {opencodeStatus === "testing" ? (
+                  <LoaderCircle size={13} className="animate-spin" />
+                ) : (
+                  <FlaskConical size={13} />
+                )}
+                <span>Test OpenCode Key</span>
+              </button>
             </div>
           </div>
 
