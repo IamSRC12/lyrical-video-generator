@@ -198,7 +198,8 @@ export function PreviewCanvas() {
   }
 
   function handleSeek(time: number) {
-    const safeTime = Math.max(0, Math.min(project.duration, time));
+    const duration = project ? project.duration : 0;
+    const safeTime = Math.max(0, Math.min(duration, time));
     setPlayhead(safeTime);
     if (audioRef.current) {
       audioRef.current.currentTime = safeTime;
