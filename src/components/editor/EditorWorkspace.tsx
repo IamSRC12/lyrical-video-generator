@@ -1,4 +1,3 @@
-
 "use client";
 
 import {useEditorStore} from "@/stores/editor-store";
@@ -35,5 +34,3 @@ export function EditorWorkspace() {
     </div>
   );
 }
-
-

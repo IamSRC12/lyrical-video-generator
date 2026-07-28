@@ -1,4 +1,3 @@
-
 import {animationSchema} from "@/lib/editor-schema";
 import {z} from "zod";
 
@@ -99,5 +98,3 @@ export async function generateContextualAnimations(options: {
     JSON.parse(extractJson(content))
   ).animations;
 }
-
-

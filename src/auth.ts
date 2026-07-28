@@ -1,4 +1,3 @@
-
 export async function auth() {
   return {
     user: {
@@ -15,6 +14,3 @@ export const handlers = {
 
 export async function signIn() {}
 export async function signOut() {}
-
-
-

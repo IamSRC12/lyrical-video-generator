@@ -1,4 +1,3 @@
-
 import {alignLyricsToWords} from "@/lib/alignment";
 import {requireUser} from "@/lib/auth-guard";
 import {transcribeWithGroq} from "@/services/groq";
@@ -86,5 +85,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
-

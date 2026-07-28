@@ -1,4 +1,3 @@
-
 import {readFile, stat} from "node:fs/promises";
 import path from "node:path";
 
@@ -99,5 +98,3 @@ export async function HEAD(
   const {id} = await context.params;
   return serveRender(request, id, false);
 }
-
-

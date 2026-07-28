@@ -1,4 +1,3 @@
-
 "use client";
 
 import {create} from "zustand";
@@ -23,8 +22,6 @@ type EditorState = {
   setAnimation: (id: string, animation: AnimationName) => void;
   setSegments: (segments: LyricSegment[]) => void;
   setBackground: (url?: string) => void;
-  setAudioUrl: (url: string) => void;
-  replaceAudioUrl: (url: string) => void;
   patchTextStyle: (
     patch: Partial<EditorProject["textStyle"]>
   ) => void;
@@ -114,20 +111,6 @@ export const useEditorStore = create<EditorState>((set) => ({
         : state
     ),
 
-  setAudioUrl: (audioUrl) =>
-    set((state) =>
-      state.project
-        ? {project: {...state.project, audioUrl}}
-        : state
-    ),
-
-  replaceAudioUrl: (audioUrl) =>
-    set((state) =>
-      state.project
-        ? {project: {...state.project, audioUrl}}
-        : state
-    ),
-
   patchTextStyle: (patch) =>
     set((state) =>
       state.project
@@ -194,5 +177,3 @@ export function createProject(input: {
     }
   };
 }
-
-

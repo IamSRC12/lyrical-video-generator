@@ -1,4 +1,3 @@
-
 import {secureStorage} from "./encrypted-web-storage";
 
 export type ApiCredentials = {
@@ -15,5 +14,3 @@ export const apiKeyStorage = {
     secureStorage.set(CREDENTIAL_KEY, credentials),
   clear: () => secureStorage.remove(CREDENTIAL_KEY)
 };
-
-

@@ -1,4 +1,3 @@
-
 class SoundManager {
   private context: AudioContext | null = null;
 
@@ -35,5 +34,3 @@ class SoundManager {
 }
 
 export const soundManager = new SoundManager();
-
-

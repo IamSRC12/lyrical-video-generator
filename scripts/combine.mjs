@@ -1,4 +1,3 @@
-
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -42,5 +41,3 @@ fs.writeFileSync(outputFile, combinedContent, 'utf8');
 fs.writeFileSync(artifactFile, combinedContent, 'utf8');
 
 console.log(`Successfully generated full codebase text file (${combinedContent.length} bytes, ~${Math.round(combinedContent.length/1024)} KB)`);
-
-

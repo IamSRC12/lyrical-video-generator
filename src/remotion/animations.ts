@@ -1,4 +1,3 @@
-
 import type {AnimationName} from "@/lib/editor-schema";
 
 type AnimationStyle = {
@@ -100,5 +99,3 @@ export function getAnimationStyle(
       };
   }
 }
-
-

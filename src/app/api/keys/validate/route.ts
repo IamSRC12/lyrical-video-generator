@@ -1,4 +1,3 @@
-
 import {requireUser} from "@/lib/auth-guard";
 import {z} from "zod";
 
@@ -56,5 +55,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
-

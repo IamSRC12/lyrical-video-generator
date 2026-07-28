@@ -1,4 +1,3 @@
-
 import {requireUser} from "@/lib/auth-guard";
 import {generateContextualAnimations} from "@/services/opencode";
 import {z} from "zod";
@@ -51,5 +50,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
-

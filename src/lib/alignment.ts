@@ -1,4 +1,3 @@
-
 import type {GroqWord} from "@/services/groq";
 import type {LyricSegment, TimedWord} from "./editor-schema";
 
@@ -251,5 +250,3 @@ export function alignLyricsToWords(
     };
   });
 }
-
-

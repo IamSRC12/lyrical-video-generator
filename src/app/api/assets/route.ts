@@ -1,4 +1,3 @@
-
 import {requireUser} from "@/lib/auth-guard";
 import {mkdir, writeFile} from "node:fs/promises";
 import path from "node:path";
@@ -51,5 +50,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
-

@@ -1,4 +1,3 @@
-
 export type BeatAnalysis = {
   bpm: number;
   beats: number[];
@@ -72,5 +71,3 @@ export async function detectBeats(file: File): Promise<BeatAnalysis> {
     beats: candidateBeats
   };
 }
-
-

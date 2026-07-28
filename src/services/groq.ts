@@ -1,4 +1,3 @@
-
 import {z} from "zod";
 
 const groqWordSchema = z.object({
@@ -55,5 +54,3 @@ export async function transcribeWithGroq(options: {
 
   return groqResponseSchema.parse(await response.json());
 }
-
-

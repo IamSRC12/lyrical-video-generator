@@ -1,4 +1,3 @@
-
 /**
  * Strips HTML tags and collapses whitespace to prevent injection
  * in user-supplied text that is rendered or logged.
@@ -21,5 +20,3 @@ export function sanitizeFilename(input: string): string {
     .slice(0, 200)
     .trim();
 }
-
-

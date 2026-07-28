@@ -1,4 +1,3 @@
-
 export interface SecureStorage {
   get<T>(key: string): Promise<T | null>;
   set<T>(key: string, value: T): Promise<void>;
@@ -14,5 +13,3 @@ export interface DesktopStorageAdapter extends SecureStorage {
    * or an encrypted local database.
    */
 }
-
-

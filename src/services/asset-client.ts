@@ -1,4 +1,3 @@
-
 export async function uploadAsset(file: File): Promise<string> {
   const form = new FormData();
   form.append("file", file);
@@ -16,5 +15,3 @@ export async function uploadAsset(file: File): Promise<string> {
 
   return body.url;
 }
-
-

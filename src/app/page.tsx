@@ -1,4 +1,3 @@
-
 import {auth, signIn, signOut} from "@/auth";
 import Link from "next/link";
 
@@ -29,5 +28,3 @@ export default async function HomePage() {
     </main>
   );
 }
-
-
