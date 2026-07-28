@@ -205,7 +205,7 @@ export function UploadAndAlign() {
         toast.error(msg);
       }
       setStage("idle");
-    } font-normal {
+    } finally {
       abortControllerRef.current = null;
     }
   };
