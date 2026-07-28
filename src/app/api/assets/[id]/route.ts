@@ -1,16 +1,21 @@
+import {
+  getAssetPath
+} from "@/services/asset-storage";
 import {createReadStream} from "node:fs";
 import {stat} from "node:fs/promises";
 import {Readable} from "node:stream";
 import path from "node:path";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const contentTypes: Record<string, string> = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   ".flac": "audio/flac",
   ".ogg": "audio/ogg",
-  ".webm": "video/webm",
+  ".m4a": "audio/mp4",
+  ".webm": "audio/webm",
   ".mp4": "video/mp4",
   ".mov": "video/quicktime",
   ".png": "image/png",
@@ -24,19 +29,7 @@ const contentTypes: Record<string, string> = {
   ".woff2": "font/woff2"
 };
 
-function getAssetPath(id: string): string | null {
-  if (!/^[a-f0-9-]{36}[.][a-z0-9]{1,8}$/i.test(id)) {
-    return null;
-  }
-
-  const directory = path.resolve(
-    process.env.ASSET_DIRECTORY ?? "./data/assets"
-  );
-
-  return path.join(directory, id);
-}
-
-function fileStream(
+function streamFile(
   filePath: string,
   options?: {start?: number; end?: number}
 ): ReadableStream<Uint8Array> {
@@ -45,7 +38,11 @@ function fileStream(
   ) as ReadableStream<Uint8Array>;
 }
 
-async function serveAsset(request: Request, id: string, includeBody: boolean) {
+async function serveAsset(
+  request: Request,
+  id: string,
+  includeBody: boolean
+) {
   const filePath = getAssetPath(id);
 
   if (!filePath) {
@@ -54,35 +51,42 @@ async function serveAsset(request: Request, id: string, includeBody: boolean) {
 
   try {
     const fileStats = await stat(filePath);
+
+    if (!fileStats.isFile()) {
+      return new Response("Asset not found.", {status: 404});
+    }
+
     const size = fileStats.size;
-    const type =
+    const contentType =
       contentTypes[path.extname(id).toLowerCase()] ??
       "application/octet-stream";
 
-    const commonHeaders = {
-      "Content-Type": type,
+    const commonHeaders: Record<string, string> = {
+      "Content-Type": contentType,
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable"
+      "Cache-Control": "private, no-cache",
+      "X-Content-Type-Options": "nosniff"
     };
 
     const range = request.headers.get("range");
 
     if (!range) {
-      const body = includeBody ? fileStream(filePath) : null;
-
-      return new Response(body, {
-        status: 200,
-        headers: {
-          ...commonHeaders,
-          "Content-Length": String(size)
+      return new Response(
+        includeBody ? streamFile(filePath) : null,
+        {
+          status: 200,
+          headers: {
+            ...commonHeaders,
+            "Content-Length": String(size)
+          }
         }
-      });
+      );
     }
 
     const match = /^bytes=(\d*)-(\d*)$/i.exec(range);
 
     if (!match) {
-      return new Response("Invalid Range header.", {
+      return new Response(null, {
         status: 416,
         headers: {
           ...commonHeaders,
@@ -91,25 +95,42 @@ async function serveAsset(request: Request, id: string, includeBody: boolean) {
       });
     }
 
-    let start = match[1] ? Number(match[1]) : 0;
-    let end = match[2] ? Number(match[2]) : size - 1;
+    let start: number;
+    let end: number;
 
     if (!match[1] && match[2]) {
       const suffixLength = Number(match[2]);
+
+      if (
+        !Number.isFinite(suffixLength) ||
+        suffixLength <= 0
+      ) {
+        return new Response(null, {
+          status: 416,
+          headers: {
+            ...commonHeaders,
+            "Content-Range": `bytes */${size}`
+          }
+        });
+      }
+
       start = Math.max(0, size - suffixLength);
       end = size - 1;
+    } else {
+      start = match[1] ? Number(match[1]) : 0;
+      end = match[2] ? Number(match[2]) : size - 1;
     }
 
-    start = Math.max(0, start);
-    end = Math.min(size - 1, end);
+    end = Math.min(end, size - 1);
 
     if (
-      !Number.isFinite(start) ||
-      !Number.isFinite(end) ||
-      start > end ||
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < 0 ||
+      end < start ||
       start >= size
     ) {
-      return new Response("Requested range is not satisfiable.", {
+      return new Response(null, {
         status: 416,
         headers: {
           ...commonHeaders,
@@ -118,19 +139,26 @@ async function serveAsset(request: Request, id: string, includeBody: boolean) {
       });
     }
 
-    const body = includeBody
-      ? fileStream(filePath, {start, end})
-      : null;
-
-    return new Response(body, {
-      status: 206,
-      headers: {
-        ...commonHeaders,
-        "Content-Length": String(end - start + 1),
-        "Content-Range": `bytes ${start}-${end}/${size}`
+    return new Response(
+      includeBody
+        ? streamFile(filePath, {start, end})
+        : null,
+      {
+        status: 206,
+        headers: {
+          ...commonHeaders,
+          "Content-Length": String(end - start + 1),
+          "Content-Range": `bytes ${start}-${end}/${size}`
+        }
       }
+    );
+  } catch (error) {
+    console.error("Asset serving error:", {
+      id,
+      filePath,
+      error
     });
-  } catch {
+
     return new Response("Asset not found.", {status: 404});
   }
 }
