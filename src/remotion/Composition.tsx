@@ -1,151 +1,133 @@
-import React from "react";
-import {
-  AbsoluteFill,
-  Audio,
-  Img,
-  useCurrentFrame,
-  useVideoConfig
-} from "remotion";
-import type {EditorProject} from "../lib/editor-schema";
-import {getAnimationStyle} from "./animations";
-import {getActiveSegment, getHighlightedWordIndex} from "../lib/caption-timing";
+import type { EditorProject } from "@/lib/editor-schema";
+import { Audio, AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
+import { getAnimationStyle } from "./animations";
 
-type CompositionProps = {
+type LyricalCompositionProps = {
   project: EditorProject;
 };
 
-export const LyricalVideoComposition: React.FC<CompositionProps> = ({
-  project
-}) => {
+export const LyricalComposition: React.FC<LyricalCompositionProps> = ({ project }) => {
   const frame = useCurrentFrame();
-  const {fps} = useVideoConfig();
+  const { fps } = useVideoConfig();
   const currentTime = frame / fps;
-
-  const activeSegment = getActiveSegment(project.segments, currentTime);
-
-  const segmentProgress = activeSegment
-    ? Math.min(
-        1,
-        (currentTime - activeSegment.start) /
-          Math.max(0.1, (activeSegment.end - activeSegment.start) * 0.3)
-      )
-    : 0;
-
-  const animStyle = activeSegment
-    ? getAnimationStyle(activeSegment.animation, segmentProgress)
-    : {opacity: 0, transform: "none"};
-
-  const highlightUpTo = activeSegment
-    ? getHighlightedWordIndex(activeSegment, currentTime)
-    : -1;
 
   const style = project.textStyle;
 
+  // Active lyric segment
+  const activeSegment = project.segments.find(
+    (seg) => currentTime >= seg.start && currentTime <= seg.end
+  );
+
+  let activeAnimStyle = { opacity: 0, transform: "none" };
+
+  if (activeSegment) {
+    const startFrame = Math.floor(activeSegment.start * fps);
+    const endFrame = Math.floor(activeSegment.end * fps);
+
+    activeAnimStyle = getAnimationStyle({
+      animation: activeSegment.animation,
+      frame,
+      fps,
+      segmentStartFrame: startFrame,
+      segmentEndFrame: endFrame,
+      intensity: activeSegment.animationIntensity
+    });
+  }
+
+  // Beat pulse calculation
+  let beatScale = 1.0;
+  if (project.toggles?.beatSync && project.beats?.length) {
+    const isNearBeat = project.beats.some((b) => Math.abs(b - currentTime) < 0.08);
+    if (isNearBeat) {
+      beatScale = 1.05;
+    }
+  }
+
   return (
-    <AbsoluteFill>
-      {/* Background */}
-      <AbsoluteFill style={{backgroundColor: project.backgroundColor}}>
-        {project.backgroundUrl && (
-          <Img
+    <AbsoluteFill
+      style={{
+        backgroundColor: project.backgroundColor || "#090d16",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: style.fontFamily || "Inter",
+        overflow: "hidden"
+      }}
+    >
+      {/* Background Image/Color Overlay */}
+      {project.backgroundUrl && (
+        <AbsoluteFill>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
             src={project.backgroundUrl}
+            alt="Background"
             style={{
               width: "100%",
               height: "100%",
-              objectFit: "cover"
+              objectFit: "cover",
+              opacity: 0.6
             }}
           />
-        )}
+        </AbsoluteFill>
+      )}
 
-        {/* Gradient overlay */}
-        <AbsoluteFill
-          style={{
-            background:
-              "linear-gradient(to top, rgba(0,0,0,0.6), transparent, rgba(0,0,0,0.3))"
-          }}
-        />
-      </AbsoluteFill>
+      {/* Render Audio Track */}
+      {project.audioUrl && <Audio src={project.audioUrl} />}
 
-      {/* Audio */}
-      <Audio src={project.audioUrl} />
-
-      {/* Lyrics Container */}
+      {/* Active Lyric Display */}
       {activeSegment && (
         <div
           style={{
             position: "absolute",
-            left: `${style.positionX}%`,
             top: `${style.positionY}%`,
-            transform: `translate(-50%, -50%) ${animStyle.transform}`,
-            opacity: animStyle.opacity,
-            filter: animStyle.filter,
+            left: `${style.positionX}%`,
+            transform: `translate(-50%, -50%) scale(${beatScale}) ${activeAnimStyle.transform}`,
+            opacity: activeAnimStyle.opacity,
+            filter: activeAnimStyle.filter,
             textAlign: style.align,
-            maxWidth: "85%",
-            backgroundColor: `color-mix(in srgb, ${style.backgroundColor} ${
-              style.backgroundOpacity * 100
-            }%, transparent)`,
+            maxWidth: `${style.maxWidthPercent}%`,
+            fontSize: `${style.fontSize}px`,
+            fontWeight: style.fontWeight,
+            fontStyle: style.fontStyle,
+            lineHeight: style.lineHeight,
+            letterSpacing: `${style.letterSpacing}px`,
+            color: style.color,
+            WebkitTextStroke: `${style.outlineWidth}px ${style.outlineColor}`,
+            textShadow: `${style.shadowOffsetX}px ${style.shadowOffsetY}px ${style.shadowBlur}px ${style.shadowColor}`,
+            textTransform: style.textTransform,
+            backgroundColor:
+              style.backgroundOpacity > 0
+                ? style.backgroundColor
+                : "transparent",
             padding: `${style.paddingY}px ${style.paddingX}px`,
-            borderRadius: `${style.borderRadius}px`
+            borderRadius: `${style.borderRadius}px`,
+            transition: "transform 0.05s ease-out"
           }}
         >
-          <p
-            style={{
-              fontFamily: style.fontFamily,
-              fontSize: style.fontSize,
-              fontWeight: style.fontWeight,
-              lineHeight: style.lineHeight,
-              letterSpacing: `${style.letterSpacing}px`,
-              textTransform: style.textTransform,
-              color: style.color,
-              textShadow: animStyle.textShadow ?? style.shadow,
-              WebkitTextStroke: `${style.outlineWidth}px ${style.outlineColor}`,
-              margin: 0
-            }}
-          >
-            {project.toggles.karaokeHighlight
-              ? activeSegment.words.map((word, i) => (
+          {/* Word-level Karaoke Highlighting */}
+          {project.toggles?.karaokeHighlight && activeSegment.words?.length ? (
+            <div style={{ display: "flex", flexWrap: "wrap", justifyContent: style.align, gap: "0.25em" }}>
+              {activeSegment.words.map((w, idx) => {
+                const isWordActive = currentTime >= w.start && currentTime <= w.end;
+                return (
                   <span
-                    key={i}
+                    key={idx}
                     style={{
-                      color:
-                        i <= highlightUpTo
-                          ? style.highlightColor
-                          : style.color,
-                      transition: "color 0.08s ease"
+                      color: isWordActive ? style.highlightColor : style.color,
+                      transform: isWordActive ? "scale(1.08)" : "scale(1.0)",
+                      transition: "color 0.1s ease, transform 0.1s ease"
                     }}
                   >
-                    {word.word}{" "}
+                    {w.word}
                   </span>
-                ))
-              : activeSegment.line}
-          </p>
+                );
+              })}
+            </div>
+          ) : (
+            <span>{activeSegment.line}</span>
+          )}
         </div>
       )}
-
-      {/* Beat sync flash overlay */}
-      {project.toggles.beatSync && (() => {
-        const nearestBeat = project.beats.reduce(
-          (closest, beat) =>
-            Math.abs(beat - currentTime) < Math.abs(closest - currentTime)
-              ? beat
-              : closest,
-          Infinity
-        );
-
-        const beatDistance = Math.abs(currentTime - nearestBeat);
-        const flashOpacity =
-          beatDistance < 0.08
-            ? (1 - beatDistance / 0.08) * 0.12
-            : 0;
-
-        return flashOpacity > 0 ? (
-          <AbsoluteFill
-            style={{
-              backgroundColor: `rgba(139, 92, 246, ${flashOpacity})`,
-              pointerEvents: "none"
-            }}
-          />
-        ) : null;
-      })()}
     </AbsoluteFill>
   );
 };
