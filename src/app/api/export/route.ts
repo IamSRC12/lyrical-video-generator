@@ -17,32 +17,75 @@ const exportSchema = z.object({
   profile: z.enum(["draft", "standard", "high"]).default("standard")
 });
 
-async function verifyAsset(url: string, label: string) {
+function getInternalRenderBaseUrl(request: Request): string {
+  if (process.env.RENDER_BASE_URL) {
+    return process.env.RENDER_BASE_URL.replace(/\/+$/, "");
+  }
+
+  const requestUrl = new URL(request.url);
+
+  if (process.env.NODE_ENV !== "production") {
+    return `http://127.0.0.1:${requestUrl.port || "3000"}`;
+  }
+
+  return `http://127.0.0.1:${process.env.PORT ?? "3000"}`;
+}
+
+function rewriteLocalAssetUrl(
+  value: string,
+  renderBaseUrl: string
+): string {
   try {
-    const response = await fetch(url, {
+    const parsed = new URL(value);
+
+    if (parsed.pathname.startsWith("/api/assets/")) {
+      return new URL(
+        `${parsed.pathname}${parsed.search}`,
+        renderBaseUrl
+      ).toString();
+    }
+
+    return value;
+  } catch {
+    return value;
+  }
+}
+
+async function verifyRenderAsset(
+  url: string,
+  label: string
+): Promise<void> {
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
       method: "HEAD",
       cache: "no-store",
       signal: AbortSignal.timeout(15_000)
     });
-
-    if (!response.ok) {
-      throw new Error(
-        `${label} is unavailable (${response.status}). ` +
-          "The project may contain an expired upload. Please re-upload the file."
-      );
-    }
-
-    const length = Number(response.headers.get("content-length") ?? 0);
-
-    if (length <= 0) {
-      throw new Error(`${label} is empty or inaccessible.`);
-    }
   } catch (error) {
-    if (error instanceof Error && error.message.includes("unavailable")) {
-      throw error;
-    }
-    // Non-critical network errors in dev environment can log warning
-    console.warn(`Preflight asset verification warning for ${label}:`, error);
+    throw new Error(
+      `${label} could not be reached by the renderer: ${
+        error instanceof Error ? error.message : "Network error"
+      }`
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `${label} is unavailable (${response.status}). ` +
+        "Please re-upload the file before exporting."
+    );
+  }
+
+  const contentLength = Number(
+    response.headers.get("content-length") ?? 0
+  );
+
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    throw new Error(
+      `${label} is empty. Please re-upload the file.`
+    );
   }
 }
 
@@ -64,45 +107,38 @@ export async function POST(request: Request) {
     const outputFilename = `${crypto.randomUUID()}.mp4`;
     const outputPath = path.join(outputDir, outputFilename);
 
-    const requestUrl = new URL(request.url);
-    const renderBaseUrl =
-      process.env.RENDER_BASE_URL ??
-      (process.env.NODE_ENV === "production"
-        ? `http://127.0.0.1:${process.env.PORT ?? "3000"}`
-        : `http://127.0.0.1:${requestUrl.port || "3000"}`);
-
-    function rewriteLocalAssetUrl(value: string): string {
-      try {
-        const parsed = new URL(value);
-
-        if (
-          parsed.pathname.startsWith("/api/assets/") ||
-          parsed.pathname.startsWith("/api/renders/")
-        ) {
-          return new URL(
-            `${parsed.pathname}${parsed.search}`,
-            renderBaseUrl
-          ).toString();
-        }
-
-        return value;
-      } catch {
-        return value;
-      }
-    }
+    const renderBaseUrl = getInternalRenderBaseUrl(request);
 
     const renderProject = {
       ...project,
-      audioUrl: rewriteLocalAssetUrl(project.audioUrl),
+      audioUrl: rewriteLocalAssetUrl(
+        project.audioUrl,
+        renderBaseUrl
+      ),
       backgroundUrl: project.backgroundUrl
-        ? rewriteLocalAssetUrl(project.backgroundUrl)
+        ? rewriteLocalAssetUrl(
+            project.backgroundUrl,
+            renderBaseUrl
+          )
         : undefined
     };
 
-    // Preflight asset verification
-    await verifyAsset(renderProject.audioUrl, "Audio asset");
+    console.log("Export asset resolution", {
+      originalAudioUrl: project.audioUrl,
+      renderAudioUrl: renderProject.audioUrl,
+      renderBaseUrl
+    });
+
+    await verifyRenderAsset(
+      renderProject.audioUrl,
+      "Audio asset"
+    );
+
     if (renderProject.backgroundUrl) {
-      await verifyAsset(renderProject.backgroundUrl, "Background asset");
+      await verifyRenderAsset(
+        renderProject.backgroundUrl,
+        "Background asset"
+      );
     }
 
     const profiles = {
@@ -180,7 +216,7 @@ export async function POST(request: Request) {
           console.log(`Render progress (${profile}): ${Math.round(progress * 100)}%`);
         },
         onBrowserLog: (log) => {
-          console.log(`[Remotion ${log.type}] ${log.text}`);
+          console.log(`[Remotion browser ${log.type}] ${log.text}`);
         }
       });
     } catch (error) {

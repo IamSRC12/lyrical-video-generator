@@ -37,8 +37,12 @@ RUN mkdir -p /app/data/assets /app/data/renders
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV ASSET_DIRECTORY=/app/data/assets
+ENV RENDER_DIRECTORY=/app/data/renders
 ENV RENDER_BASE_URL=http://127.0.0.1:3000
 ENV RENDER_CONCURRENCY=25%
+
+VOLUME ["/app/data"]
 
 EXPOSE 3000
 

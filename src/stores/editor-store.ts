@@ -28,6 +28,7 @@ type EditorState = {
   setSegments: (segments: LyricSegment[]) => void;
   setBackground: (url?: string) => void;
   setAudioUrl: (url: string) => void;
+  replaceAudioUrl: (audioUrl: string) => void;
   patchTextStyle: (
     patch: Partial<EditorProject["textStyle"]>
   ) => void;
