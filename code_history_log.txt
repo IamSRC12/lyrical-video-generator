@@ -1,4 +1,503 @@
 ================================================================================
+TIMESTAMP: 2026-07-29 00:21:20
+FILE PATH: src/stores/editor-store.ts
+ACTION: Created
+================================================================================
+import type { AnimationName, EditorProject, LyricSegment, TextStyle } from "@/lib/editor-schema";
+import { create } from "zustand";
+
+type EditorState = {
+  project: EditorProject | null;
+  currentTime: number;
+  isPlaying: boolean;
+  selectedSegmentId: string | null;
+  history: EditorProject[];
+  historyIndex: number;
+
+  // Actions
+  setProject: (project: EditorProject) => void;
+  setCurrentTime: (time: number) => void;
+  setIsPlaying: (playing: boolean) => void;
+  togglePlay: () => void;
+  selectSegment: (id: string | null) => void;
+
+  updateSegment: (id: string, patch: Partial<LyricSegment>) => void;
+  updateSegmentTime: (id: string, start: number, end: number) => void;
+  splitSegment: (id: string, splitTime: number) => void;
+  mergeSegments: (firstId: string, secondId: string) => void;
+  deleteSegment: (id: string) => void;
+  realignSegment: (id: string) => void;
+
+  updateTextStyle: (patch: Partial<TextStyle>) => void;
+  setSegmentAnimation: (id: string, animation: AnimationName) => void;
+  setAllAnimations: (animation: AnimationName) => void;
+  setProjectBackground: (url?: string, color?: string) => void;
+
+  undo: () => void;
+  redo: () => void;
+};
+
+const MAX_HISTORY = 30;
+
+function pushHistory(state: EditorState, newProject: EditorProject): Partial<EditorState> {
+  const newHistory = state.history.slice(0, state.historyIndex + 1);
+  newHistory.push(JSON.parse(JSON.stringify(newProject)));
+
+  if (newHistory.length > MAX_HISTORY) {
+    newHistory.shift();
+  }
+
+  return {
+    project: newProject,
+    history: newHistory,
+    historyIndex: newHistory.length - 1
+  };
+}
+
+export const useEditorStore = create<EditorState>((set, get) => ({
+  project: null,
+  currentTime: 0,
+  isPlaying: false,
+  selectedSegmentId: null,
+  history: [],
+  historyIndex: -1,
+
+  setProject: (project) => {
+    const clone = JSON.parse(JSON.stringify(project));
+    set({
+      project: clone,
+      currentTime: 0,
+      isPlaying: false,
+      selectedSegmentId: clone.segments[0]?.id || null,
+      history: [clone],
+      historyIndex: 0
+    });
+  },
+
+  setCurrentTime: (time) => {
+    const { project } = get();
+    const duration = project?.duration || 0;
+    const clamped = Math.max(0, Math.min(time, duration));
+    set({ currentTime: clamped });
+  },
+
+  setIsPlaying: (playing) => set({ isPlaying: playing }),
+  togglePlay: () => set((s) => ({ isPlaying: !s.isPlaying })),
+
+  selectSegment: (id) => set({ selectedSegmentId: id }),
+
+  updateSegment: (id, patch) => {
+    const { project } = get();
+    if (!project) return;
+
+    const updatedSegments = project.segments.map((seg) => {
+      if (seg.id === id) {
+        return { ...seg, ...patch };
+      }
+      return seg;
+    });
+
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  updateSegmentTime: (id, start, end) => {
+    const { project } = get();
+    if (!project) return;
+
+    const MIN_DURATION = 0.2;
+    const validStart = Math.max(0, start);
+    const validEnd = Math.max(validStart + MIN_DURATION, end);
+
+    const updatedSegments = project.segments.map((seg) => {
+      if (seg.id === id) {
+        // Adjust word timestamps proportionally
+        const oldDuration = Math.max(0.1, seg.end - seg.start);
+        const newDuration = validEnd - validStart;
+        const scale = newDuration / oldDuration;
+
+        const updatedWords = seg.words.map((w) => {
+          const relativeStart = w.start - seg.start;
+          const relativeEnd = w.end - seg.start;
+          return {
+            ...w,
+            start: validStart + relativeStart * scale,
+            end: validStart + relativeEnd * scale
+          };
+        });
+
+        return {
+          ...seg,
+          start: validStart,
+          end: validEnd,
+          words: updatedWords
+        };
+      }
+      return seg;
+    });
+
+    // Sort segments monotonically by start time
+    updatedSegments.sort((a, b) => a.start - b.start);
+
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  splitSegment: (id, splitTime) => {
+    const { project } = get();
+    if (!project) return;
+
+    const targetIdx = project.segments.findIndex((s) => s.id === id);
+    if (targetIdx === -1) return;
+
+    const seg = project.segments[targetIdx];
+    if (splitTime <= seg.start + 0.1 || splitTime >= seg.end - 0.1) return;
+
+    const firstWords = seg.words.filter((w) => w.end <= splitTime);
+    const secondWords = seg.words.filter((w) => w.start >= splitTime);
+
+    const firstSeg: LyricSegment = {
+      ...seg,
+      id: crypto.randomUUID(),
+      line: firstWords.map((w) => w.word).join(" ") || seg.line.slice(0, Math.floor(seg.line.length / 2)),
+      end: splitTime,
+      words: firstWords
+    };
+
+    const secondSeg: LyricSegment = {
+      ...seg,
+      id: crypto.randomUUID(),
+      line: secondWords.map((w) => w.word).join(" ") || seg.line.slice(Math.floor(seg.line.length / 2)),
+      start: splitTime,
+      words: secondWords
+    };
+
+    const newSegments = [...project.segments];
+    newSegments.splice(targetIdx, 1, firstSeg, secondSeg);
+
+    const newProject: EditorProject = { ...project, segments: newSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  mergeSegments: (firstId, secondId) => {
+    const { project } = get();
+    if (!project) return;
+
+    const firstIdx = project.segments.findIndex((s) => s.id === firstId);
+    const secondIdx = project.segments.findIndex((s) => s.id === secondId);
+    if (firstIdx === -1 || secondIdx === -1) return;
+
+    const first = project.segments[firstIdx];
+    const second = project.segments[secondIdx];
+
+    const mergedSeg: LyricSegment = {
+      ...first,
+      id: crypto.randomUUID(),
+      line: `${first.line} ${second.line}`,
+      end: Math.max(first.end, second.end),
+      words: [...first.words, ...second.words].sort((a, b) => a.start - b.start)
+    };
+
+    const newSegments = project.segments.filter((s) => s.id !== firstId && s.id !== secondId);
+    newSegments.push(mergedSeg);
+    newSegments.sort((a, b) => a.start - b.start);
+
+    const newProject: EditorProject = { ...project, segments: newSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  deleteSegment: (id) => {
+    const { project } = get();
+    if (!project) return;
+
+    const newSegments = project.segments.filter((s) => s.id !== id);
+    const newProject: EditorProject = { ...project, segments: newSegments };
+    set({ selectedSegmentId: null, ...pushHistory(get(), newProject) });
+  },
+
+  realignSegment: (id) => {
+    const { project } = get();
+    if (!project) return;
+
+    const idx = project.segments.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+
+    const seg = project.segments[idx];
+    const prevSeg = project.segments[idx - 1];
+    const nextSeg = project.segments[idx + 1];
+
+    const minStart = prevSeg ? prevSeg.end + 0.05 : 0;
+    const maxEnd = nextSeg ? nextSeg.start - 0.05 : project.duration;
+
+    if (minStart >= maxEnd) return;
+
+    const duration = Math.min(seg.end - seg.start, maxEnd - minStart);
+    const newStart = minStart;
+    const newEnd = minStart + duration;
+
+    get().updateSegmentTime(id, newStart, newEnd);
+  },
+
+  updateTextStyle: (patch) => {
+    const { project } = get();
+    if (!project) return;
+
+    const newTextStyle: TextStyle = { ...project.textStyle, ...patch };
+    const newProject: EditorProject = { ...project, textStyle: newTextStyle };
+    set(pushHistory(get(), newProject));
+  },
+
+  setSegmentAnimation: (id, animation) => {
+    get().updateSegment(id, { animation });
+  },
+
+  setAllAnimations: (animation) => {
+    const { project } = get();
+    if (!project) return;
+
+    const updatedSegments = project.segments.map((s) => ({ ...s, animation }));
+    const newProject: EditorProject = { ...project, segments: updatedSegments };
+    set(pushHistory(get(), newProject));
+  },
+
+  setProjectBackground: (url, color) => {
+    const { project } = get();
+    if (!project) return;
+
+    const newProject: EditorProject = {
+      ...project,
+      backgroundUrl: url ?? project.backgroundUrl,
+      backgroundColor: color ?? project.backgroundColor
+    };
+    set(pushHistory(get(), newProject));
+  },
+
+  undo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      set({
+        project: JSON.parse(JSON.stringify(history[newIndex])),
+        historyIndex: newIndex
+      });
+    }
+  },
+
+  redo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1;
+      set({
+        project: JSON.parse(JSON.stringify(history[newIndex])),
+        historyIndex: newIndex
+      });
+    }
+  }
+}));
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:20:59
+FILE PATH: src/app/api/nvidia/animations/route.ts
+ACTION: Created
+================================================================================
+import { requireAuth } from "@/lib/auth-guard";
+import { lyricSegmentSchema } from "@/lib/editor-schema";
+import { generateNvidiaAnimations } from "@/services/nvidia";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+const requestBodySchema = z.object({
+  segments: z.array(lyricSegmentSchema),
+  bpm: z.number().optional(),
+  moodHint: z.string().optional()
+});
+
+export async function POST(request: Request) {
+  const { response } = await requireAuth();
+  if (response) return response;
+
+  try {
+    const customNvidiaKey = request.headers.get("x-nvidia-key");
+    const nvidiaApiKey = customNvidiaKey || process.env.NVIDIA_API_KEY;
+
+    if (!nvidiaApiKey) {
+      return NextResponse.json(
+        { error: "No NVIDIA API key provided. Please configure custom API key or set NVIDIA_API_KEY on server." },
+        { status: 400 }
+      );
+    }
+
+    const body = await request.json();
+    const { segments, bpm, moodHint } = requestBodySchema.parse(body);
+
+    const updatedSegments = await generateNvidiaAnimations({
+      apiKey: nvidiaApiKey,
+      segments,
+      bpm,
+      moodHint
+    });
+
+    return NextResponse.json({ segments: updatedSegments });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "AI animation generation failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+
+================================================================================
+================================================================================
+TIMESTAMP: 2026-07-29 00:20:48
+FILE PATH: src/services/nvidia.ts
+ACTION: Created
+================================================================================
+import { animationSchema, type AnimationName, type LyricSegment } from "@/lib/editor-schema";
+import { z } from "zod";
+
+const aiAnimationAssignmentSchema = z.object({
+  id: z.string(),
+  animation: animationSchema,
+  intensity: z.number().min(0.2).max(3).optional()
+});
+
+const aiResponseSchema = z.array(aiAnimationAssignmentSchema);
+
+const VALID_ANIMATIONS: AnimationName[] = [
+  "fade",
+  "slide_up",
+  "pop",
+  "neon_pulse",
+  "zoom_blur",
+  "rain",
+  "shake"
+];
+
+function sanitizeJsonString(text: string): string {
+  // Strip Markdown code blocks if present
+  let clean = text.trim();
+  if (clean.startsWith("```")) {
+    clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  }
+  return clean.trim();
+}
+
+function getDeterministicFallback(segmentLine: string, index: number): AnimationName {
+  const lower = segmentLine.toLowerCase();
+  if (lower.includes("rain") || lower.includes("fall") || lower.includes("tear")) return "rain";
+  if (lower.includes("fire") || lower.includes("dance") || lower.includes("loud") || lower.includes("beat")) return "neon_pulse";
+  if (lower.includes("jump") || lower.includes("up") || lower.includes("rise")) return "slide_up";
+  if (lower.includes("crazy") || lower.includes("shake") || lower.includes("wild")) return "shake";
+  if (lower.includes("look") || lower.includes("eye") || lower.includes("see")) return "zoom_blur";
+  return VALID_ANIMATIONS[index % VALID_ANIMATIONS.length];
+}
+
+export async function generateNvidiaAnimations(options: {
+  apiKey: string;
+  segments: LyricSegment[];
+  bpm?: number;
+  moodHint?: string;
+}): Promise<LyricSegment[]> {
+  const { apiKey, segments, bpm = 120, moodHint = "energetic" } = options;
+
+  if (!segments.length) return segments;
+
+  const promptSegments = segments.map((s, idx) => ({
+    id: s.id,
+    index: idx,
+    line: s.line,
+    duration: (s.end - s.start).toFixed(2)
+  }));
+
+  const systemPrompt = `You are a high-end music video motion graphics director.
+Given a list of lyric lines, song BPM (${bpm}), and mood ("${moodHint}"), assign the single most visually engaging animation to each line.
+You MUST choose ONLY from these exact animation names: ["fade", "slide_up", "pop", "neon_pulse", "zoom_blur", "rain", "shake"].
+Output ONLY valid JSON matching this structure:
+[
+  { "id": "segment-id", "animation": "chosen_animation_name", "intensity": 1.0 }
+]
+Do not include any conversational text or explanation outside the JSON array.`;
+
+  const userPrompt = `Assign animations to these lyric lines:\n${JSON.stringify(promptSegments, null, 2)}`;
+
+  let lastError: Error | null = null;
+  const maxRetries = 3;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+      const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "meta/llama-3.3-70b-instruct",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+          ],
+          temperature: 0.3,
+          max_tokens: 1024
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`NVIDIA API response HTTP ${response.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const data = await response.json();
+      const rawContent = data.choices?.[0]?.message?.content || "";
+      const cleanJson = sanitizeJsonString(rawContent);
+
+      const parsed = JSON.parse(cleanJson);
+      const validated = aiResponseSchema.parse(parsed);
+
+      const mapById = new Map(validated.map((v) => [v.id, v]));
+
+      return segments.map((seg, idx) => {
+        const match = mapById.get(seg.id);
+        if (match && VALID_ANIMATIONS.includes(match.animation)) {
+          return {
+            ...seg,
+            animation: match.animation,
+            animationIntensity: match.intensity ?? seg.animationIntensity ?? 1.0
+          };
+        }
+        return {
+          ...seg,
+          animation: getDeterministicFallback(seg.line, idx)
+        };
+      });
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Exponential backoff wait before retry
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 500));
+      }
+    }
+  }
+
+  console.warn("NVIDIA NIM AI animation request failed, using deterministic fallbacks:", lastError?.message);
+
+  // Return segments with deterministic animation fallbacks on AI failure
+  return segments.map((seg, idx) => ({
+    ...seg,
+    animation: getDeterministicFallback(seg.line, idx)
+  }));
+}
+
+
+================================================================================
+================================================================================
 TIMESTAMP: 2026-07-29 00:20:34
 FILE PATH: src/lib/beat-detection.ts
 ACTION: Modified

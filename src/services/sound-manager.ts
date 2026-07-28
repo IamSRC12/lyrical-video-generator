@@ -1,35 +1,67 @@
 class SoundManager {
-  private context: AudioContext | null = null;
+  private audio: HTMLAudioElement | null = null;
+  private onTimeUpdateCallback: ((time: number) => void) | null = null;
+  private onEndedCallback: (() => void) | null = null;
 
-  async beep(frequency = 660): Promise<void> {
-    if (typeof window === "undefined") return;
-
-    this.context ??= new AudioContext();
-
-    if (this.context.state === "suspended") {
-      await this.context.resume();
+  init(url: string) {
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.src = "";
     }
 
-    const now = this.context.currentTime;
-    const oscillator = this.context.createOscillator();
-    const gain = this.context.createGain();
+    this.audio = new Audio(url);
+    this.audio.preload = "auto";
 
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(frequency, now);
-    oscillator.frequency.exponentialRampToValueAtTime(
-      frequency * 1.08,
-      now + 0.08
-    );
+    this.audio.addEventListener("timeupdate", () => {
+      if (this.audio && this.onTimeUpdateCallback) {
+        this.onTimeUpdateCallback(this.audio.currentTime);
+      }
+    });
 
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
+    this.audio.addEventListener("ended", () => {
+      if (this.onEndedCallback) {
+        this.onEndedCallback();
+      }
+    });
+  }
 
-    oscillator.connect(gain);
-    gain.connect(this.context.destination);
+  play() {
+    if (this.audio && this.audio.paused) {
+      this.audio.play().catch(() => {});
+    }
+  }
 
-    oscillator.start(now);
-    oscillator.stop(now + 0.14);
+  pause() {
+    if (this.audio && !this.audio.paused) {
+      this.audio.pause();
+    }
+  }
+
+  seek(time: number) {
+    if (this.audio && Number.isFinite(time)) {
+      // Avoid tiny redundant seek jitter
+      if (Math.abs(this.audio.currentTime - time) > 0.05) {
+        this.audio.currentTime = time;
+      }
+    }
+  }
+
+  onTimeUpdate(callback: (time: number) => void) {
+    this.onTimeUpdateCallback = callback;
+  }
+
+  onEnded(callback: () => void) {
+    this.onEndedCallback = callback;
+  }
+
+  destroy() {
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.src = "";
+      this.audio = null;
+    }
+    this.onTimeUpdateCallback = null;
+    this.onEndedCallback = null;
   }
 }
 
