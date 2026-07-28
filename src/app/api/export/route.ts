@@ -1,13 +1,20 @@
 import {requireUser} from "@/lib/auth-guard";
 import {
-  getRemotionBundlePath,
+  getOrBuildRemotionBundle,
   getRenderOutputDirectory,
-  getRenderConcurrency
+  getRenderConcurrency,
+  getBrowserExecutable
 } from "@/services/render";
+import {
+  createJob,
+  updateJobProgress,
+  completeJob,
+  failJob
+} from "@/services/render-jobs";
 import {projectSchema} from "@/lib/editor-schema";
-import {access, mkdir, rm} from "node:fs/promises";
+import {mkdir, rm} from "node:fs/promises";
 import path from "node:path";
-import {z} from "zod";
+import {z, ZodError} from "zod";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -23,28 +30,29 @@ function getInternalRenderBaseUrl(request: Request): string {
   }
 
   const requestUrl = new URL(request.url);
+  const port = requestUrl.port || process.env.PORT || "3000";
 
-  if (process.env.NODE_ENV !== "production") {
-    return `http://127.0.0.1:${requestUrl.port || "3000"}`;
-  }
-
-  return `http://127.0.0.1:${process.env.PORT ?? "3000"}`;
+  return `http://127.0.0.1:${port}`;
 }
 
 function rewriteLocalAssetUrl(
   value: string,
   renderBaseUrl: string
 ): string {
+  if (!value) return value;
+
+  if (value.startsWith("/")) {
+    return new URL(value, renderBaseUrl).toString();
+  }
+
   try {
     const parsed = new URL(value);
-
     if (parsed.pathname.startsWith("/api/assets/")) {
       return new URL(
         `${parsed.pathname}${parsed.search}`,
         renderBaseUrl
       ).toString();
     }
-
     return value;
   } catch {
     return value;
@@ -89,51 +97,40 @@ async function verifyRenderAsset(
   }
 }
 
-export async function POST(request: Request) {
+async function runRenderJob(
+  jobId: string,
+  project: z.infer<typeof projectSchema>,
+  profile: "draft" | "standard" | "high",
+  requestUrl: string
+): Promise<void> {
+  const startTime = Date.now();
+  const outputDir = getRenderOutputDirectory();
+  await mkdir(outputDir, {recursive: true});
+
+  const outputFilename = `${crypto.randomUUID()}.mp4`;
+  const outputPath = path.join(outputDir, outputFilename);
+
+  const fakeRequest = new Request(requestUrl);
+  const renderBaseUrl = getInternalRenderBaseUrl(fakeRequest);
+
   try {
-    await requireUser();
-
-    const body = await request.json();
-    const {project, profile} = exportSchema.parse(body);
-
-    const bundlePath = getRemotionBundlePath();
-    await access(bundlePath);
-
-    const outputDir = getRenderOutputDirectory();
-    const concurrency = getRenderConcurrency();
-
-    await mkdir(outputDir, {recursive: true});
-
-    const outputFilename = `${crypto.randomUUID()}.mp4`;
-    const outputPath = path.join(outputDir, outputFilename);
-
-    const renderBaseUrl = getInternalRenderBaseUrl(request);
+    updateJobProgress(jobId, 0.01, "rendering");
 
     const renderProject = {
       ...project,
-      audioUrl: rewriteLocalAssetUrl(
-        project.audioUrl,
-        renderBaseUrl
-      ),
+      audioUrl: rewriteLocalAssetUrl(project.audioUrl, renderBaseUrl),
       backgroundUrl: project.backgroundUrl
-        ? rewriteLocalAssetUrl(
-            project.backgroundUrl,
-            renderBaseUrl
-          )
+        ? rewriteLocalAssetUrl(project.backgroundUrl, renderBaseUrl)
         : undefined
     };
 
-    console.log("Export asset resolution", {
+    console.log("Export asset resolution:", {
       originalAudioUrl: project.audioUrl,
       renderAudioUrl: renderProject.audioUrl,
       renderBaseUrl
     });
 
-    await verifyRenderAsset(
-      renderProject.audioUrl,
-      "Audio asset"
-    );
-
+    await verifyRenderAsset(renderProject.audioUrl, "Audio asset");
     if (renderProject.backgroundUrl) {
       await verifyRenderAsset(
         renderProject.backgroundUrl,
@@ -164,16 +161,24 @@ export async function POST(request: Request) {
 
     const profileSettings = profiles[profile];
 
-    const {renderMedia, selectComposition} = await import(
+    const bundlePath = await getOrBuildRemotionBundle();
+
+    const {renderMedia, selectComposition, ensureBrowser} = await import(
       "@remotion/renderer"
     );
+
+    await ensureBrowser();
+    const browserExecutable = getBrowserExecutable();
 
     const rendererOptions = {
       chromiumOptions: {
         enableMultiProcessOnLinux: true
       },
+      browserExecutable,
       timeoutInMilliseconds: 120_000,
-      logLevel: "info" as const
+      logLevel: (process.env.DEBUG_RENDER ? "verbose" : "info") as
+        | "verbose"
+        | "info"
     };
 
     const composition = await selectComposition({
@@ -189,57 +194,95 @@ export async function POST(request: Request) {
       ...rendererOptions
     });
 
-    const startTime = Date.now();
-
-    try {
-      await renderMedia({
-        composition,
-        serveUrl: bundlePath,
-        codec: "h264",
-        audioCodec: "aac",
-        outputLocation: outputPath,
-        inputProps: {
-          project: {
-            ...renderProject,
-            width: profileSettings.width,
-            height: profileSettings.height
-          }
-        },
-        concurrency,
-        crf: profileSettings.crf,
-        pixelFormat: "yuv420p",
-        x264Preset: profileSettings.x264Preset,
-        overwrite: true,
-        licenseKey: process.env.REMOTION_LICENSE_KEY || undefined,
-        ...rendererOptions,
-        onProgress: ({progress}) => {
-          console.log(`Render progress (${profile}): ${Math.round(progress * 100)}%`);
-        },
-        onBrowserLog: (log) => {
-          console.log(`[Remotion browser ${log.type}] ${log.text}`);
+    await renderMedia({
+      composition,
+      serveUrl: bundlePath,
+      codec: "h264",
+      audioCodec: "aac",
+      outputLocation: outputPath,
+      inputProps: {
+        project: {
+          ...renderProject,
+          width: profileSettings.width,
+          height: profileSettings.height
         }
-      });
-    } catch (error) {
-      await rm(outputPath, {force: true});
-      throw error;
-    }
+      },
+      concurrency: getRenderConcurrency(),
+      crf: profileSettings.crf,
+      pixelFormat: "yuv420p",
+      x264Preset: profileSettings.x264Preset,
+      overwrite: true,
+      licenseKey: process.env.REMOTION_LICENSE_KEY || undefined,
+      ...rendererOptions,
+      onProgress: ({progress}) => {
+        updateJobProgress(jobId, progress, "rendering");
+        console.log(
+          `Render job ${jobId} progress (${profile}): ${Math.round(
+            progress * 100
+          )}%`
+        );
+      },
+      onBrowserLog: (log) => {
+        console.log(`[Remotion browser ${log.type}] ${log.text}`);
+      }
+    });
 
     const durationMs = Date.now() - startTime;
-
-    return Response.json({
+    completeJob(jobId, {
       url: `/api/renders/${encodeURIComponent(outputFilename)}`,
-      durationMs,
-      outputFilename
+      outputFilename,
+      durationMs
     });
+  } catch (error) {
+    await rm(outputPath, {force: true}).catch(() => {});
+    const message =
+      error instanceof Error ? error.message : "Render failed.";
+    console.error(`Render job ${jobId} failed:`, message);
+    failJob(jobId, message);
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    await requireUser();
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json(
+        {message: "Invalid JSON request body."},
+        {status: 400}
+      );
+    }
+
+    const {project, profile} = exportSchema.parse(body);
+
+    const job = createJob();
+
+    // Start background render task without blocking response
+    void runRenderJob(job.id, project, profile, request.url);
+
+    return Response.json({jobId: job.id}, {status: 202});
   } catch (error) {
     if (error instanceof Response) return error;
 
-    console.error("Export error:", error);
+    if (error instanceof ZodError) {
+      return Response.json(
+        {
+          message: "Invalid project configuration.",
+          issues: error.issues
+        },
+        {status: 422}
+      );
+    }
+
+    console.error("Export endpoint error:", error);
 
     return Response.json(
       {
         message:
-          error instanceof Error ? error.message : "Export failed."
+          error instanceof Error ? error.message : "Export failed to start."
       },
       {status: 500}
     );

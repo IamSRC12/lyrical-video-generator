@@ -1,8 +1,12 @@
 import React from "react";
 import {Composition} from "remotion";
+import {loadFont as loadInter} from "@remotion/google-fonts/Inter";
 import {LyricalVideoComposition} from "./Composition";
 import type {EditorProject} from "../lib/editor-schema";
 import {defaultTextStyle} from "../lib/editor-schema";
+
+// Preload Inter font inside Remotion bundle
+loadInter();
 
 const defaultProject: EditorProject = {
   version: 1,

@@ -65,6 +65,19 @@ export const textStyleSchema = z.object({
   borderRadius: z.number().min(0).max(100).default(12)
 });
 
+const urlOrRelativePathSchema = z
+  .string()
+  .min(1)
+  .refine((val) => {
+    if (val.startsWith("/")) return true;
+    try {
+      new URL(val);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Must be a valid URL or relative path (e.g. /api/assets/...)");
+
 export const projectSchema = z.object({
   version: z.literal(1),
   title: z.string().default("Untitled lyrical video"),
@@ -72,8 +85,8 @@ export const projectSchema = z.object({
   width: z.union([z.literal(1280), z.literal(1920)]).default(1920),
   height: z.union([z.literal(720), z.literal(1080)]).default(1080),
   duration: z.number().positive(),
-  audioUrl: z.string().url(),
-  backgroundUrl: z.string().url().optional(),
+  audioUrl: urlOrRelativePathSchema,
+  backgroundUrl: urlOrRelativePathSchema.optional(),
   backgroundColor: z.string().default("#111827"),
   segments: z.array(lyricSegmentSchema),
   beats: z.array(z.number().nonnegative()).default([]),
